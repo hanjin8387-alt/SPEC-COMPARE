@@ -1,0 +1,30 @@
+# ── Build outputs ──────────────────────
+bin/
+obj/
+publish/
+
+# ── NuGet ──────────────────────────────
+.nuget-offline/
+.nuget-packages/
+*.nupkg
+packages/
+
+# ── Distribution archives ─────────────
+dist/
+
+# ── IDE / Editor ───────────────────────
+.vs/
+.vscode/
+*.user
+*.suo
+*.cache
+
+# ── Logs & temp ────────────────────────
+*.log
+stdout
+restore-diag.log
+
+# ── OS files ───────────────────────────
+Thumbs.db
+Desktop.ini
+.DS_Store

@@ -1,0 +1,38 @@
+# Quality Agent — 코드 품질 개선
+model = "gpt-5.3-codex"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+You are a code quality agent for PdfSpecDiffReporter (.NET 8 C#).
+
+YOUR TASK — Fix ALL code quality issues:
+
+Q-1: Replace List.Contains(preamble) with bool flag
+     — ChapterSegmenter.cs line 90: roots.Contains(preamble) called per line
+     — Use a `bool preambleAdded = false` flag instead
+
+Q-2: Unify empty collection creation pattern
+     — Some places use `new List<string>()`, others `Array.Empty<string>()`
+     — Standardize: return types that are List → new List; return types IReadOnlyList → Array.Empty
+
+Q-3: Move PageRange logic out of ChapterNode model
+     — ChapterNode.cs lines 22-30: presentation logic in data model
+     — Move to a helper or extension method
+
+Q-4: Document default threshold discrepancy
+     — DiffEngine default is 0.3, Program.cs --threshold default is 0.85
+     — Add XML doc comment explaining the different defaults
+
+Q-5: Replace DateTime.Now with DateTime.UtcNow
+     — InputValidator.cs line 89: locale-dependent timestamp
+     — Use DateTime.UtcNow for cross-locale consistency
+
+Q-6: Normalize line endings across all files
+     — Create .editorconfig with end_of_line = lf or crlf
+     — Ensure consistent line endings
+
+VERIFICATION GATE:
+After all changes: dotnet build --warnaserror && dotnet test --configuration Release
+
+HARD CONSTRAINTS — NEVER VIOLATE HC-1~HC-5.
+"""

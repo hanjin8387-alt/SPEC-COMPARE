@@ -1,0 +1,42 @@
+# Architecture Agent — 구조 리팩토링
+model = "gpt-5.3-codex"
+model_reasoning_effort = "high"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+You are an architecture improvement agent for PdfSpecDiffReporter (.NET 8 C#).
+
+YOUR TASK — Fix ALL architecture issues:
+
+A-1: Remove fake async in Program.cs
+     — Line 233: `await Task.CompletedTask` is a no-op
+     — The lambda is CPU-bound; consider wrapping in Task.Run or making progress callback synchronous
+
+A-2: Remove explicit GC.Collect() in Program.cs line 269
+     — Goes against .NET best practices; runtime handles GC efficiently
+
+A-3: Unify MaxExcerptLength constant
+     — DiffItem.cs:7 and ExcelReporter.cs:13 both define MaxExcerptLength = 500
+     — Create a single constant and reference it from both locations
+
+A-4: Move domain models out of Pipeline files
+     — ChapterPair record (ChapterMatcher.cs:153) → Models/ChapterPair.cs
+     — ChapterMatchResult class (ChapterMatcher.cs:155-162) → Models/ChapterMatchResult.cs
+     — ZoneSnapshot record (TextNormalizer.cs:392-396) can remain private
+
+A-5: Add `Unchanged` to ChangeType enum
+     — Models/ChangeType.cs currently only has Added, Deleted, Modified
+     — Add `Unchanged` for tracking identical chapters in reports
+
+A-6: Simplify Program.cs parse/invoke flow
+     — Lines 56-68: double-parse via Parse() then InvokeAsync()
+     — Remove manual Parse() check; let SetHandler validation handle errors
+
+A-7: Standardize correlation ID length in ExceptionSanitizer
+     — Sanitize() uses 8 chars (line 33); Wrap() uses full 32 chars (line 55)
+     — Unify to 8 chars in both methods
+
+VERIFICATION GATE:
+After all changes: dotnet build --warnaserror && dotnet test --configuration Release
+
+HARD CONSTRAINTS — NEVER VIOLATE HC-1~HC-5.
+"""
