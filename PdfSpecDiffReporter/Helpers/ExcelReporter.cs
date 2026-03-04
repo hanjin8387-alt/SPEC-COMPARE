@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using ClosedXML.Excel;
 using PdfSpecDiffReporter.Models;
-using PdfSpecDiffReporter.Pipeline;
 
 namespace PdfSpecDiffReporter.Helpers;
 
@@ -14,11 +13,14 @@ public static class ExcelReporter
     {
         "Source File",
         "Target File",
-        "Total Chapters",
-        "Matched",
-        "Modified",
-        "Added",
-        "Deleted",
+        "Source Chapters",
+        "Target Chapters",
+        "Matched Chapters",
+        "Unmatched Old Chapters",
+        "Unmatched New Chapters",
+        "Modified Items",
+        "Added Items",
+        "Deleted Items",
         "Processing Time"
     };
 
@@ -47,7 +49,7 @@ public static class ExcelReporter
         string targetFileName,
         List<ChapterPair> allPairs,
         List<DiffItem> diffs,
-        TimeSpan processingTime)
+        Func<TimeSpan> processingTimeProvider)
     {
         if (string.IsNullOrWhiteSpace(outputPath))
         {
@@ -64,6 +66,8 @@ public static class ExcelReporter
             throw new ArgumentNullException(nameof(diffs));
         }
 
+        ArgumentNullException.ThrowIfNull(processingTimeProvider);
+
         try
         {
             var fullOutputPath = Path.GetFullPath(outputPath);
@@ -74,9 +78,15 @@ public static class ExcelReporter
             }
 
             using var workbook = new XLWorkbook();
-            BuildSummarySheet(workbook, sourceFileName, targetFileName, allPairs, diffs, processingTime);
             BuildChangeDetailsSheet(workbook, allPairs, diffs);
             BuildUnmatchedSheet(workbook, allPairs);
+            BuildSummarySheet(
+                workbook,
+                sourceFileName,
+                targetFileName,
+                allPairs,
+                diffs,
+                processingTimeProvider());
 
             using var fileStream = new FileStream(fullOutputPath, FileMode.Create, FileAccess.Write, FileShare.None);
             workbook.SaveAs(fileStream);
@@ -98,19 +108,36 @@ public static class ExcelReporter
         var sheet = workbook.Worksheets.Add("Summary");
         WriteHeaders(sheet, SummaryHeaders);
 
+        var sourceChapters = allPairs
+            .Where(pair => pair.Source is not null)
+            .Select(pair => pair.Source!)
+            .Distinct()
+            .Count();
+
+        var targetChapters = allPairs
+            .Where(pair => pair.Target is not null)
+            .Select(pair => pair.Target!)
+            .Distinct()
+            .Count();
+
         var matched = allPairs.Count(pair => pair.Source is not null && pair.Target is not null);
+        var unmatchedOld = allPairs.Count(pair => pair.Source is not null && pair.Target is null);
+        var unmatchedNew = allPairs.Count(pair => pair.Source is null && pair.Target is not null);
         var added = diffs.Count(item => item.ChangeType == ChangeType.Added);
         var deleted = diffs.Count(item => item.ChangeType == ChangeType.Deleted);
         var modified = diffs.Count(item => item.ChangeType == ChangeType.Modified);
 
         sheet.Cell(2, 1).Value = sourceFileName ?? string.Empty;
         sheet.Cell(2, 2).Value = targetFileName ?? string.Empty;
-        sheet.Cell(2, 3).Value = allPairs.Count;
-        sheet.Cell(2, 4).Value = matched;
-        sheet.Cell(2, 5).Value = modified;
-        sheet.Cell(2, 6).Value = added;
-        sheet.Cell(2, 7).Value = deleted;
-        sheet.Cell(2, 8).Value = processingTime.ToString(@"mm\:ss\.fff");
+        sheet.Cell(2, 3).Value = sourceChapters;
+        sheet.Cell(2, 4).Value = targetChapters;
+        sheet.Cell(2, 5).Value = matched;
+        sheet.Cell(2, 6).Value = unmatchedOld;
+        sheet.Cell(2, 7).Value = unmatchedNew;
+        sheet.Cell(2, 8).Value = modified;
+        sheet.Cell(2, 9).Value = added;
+        sheet.Cell(2, 10).Value = deleted;
+        sheet.Cell(2, 11).Value = processingTime.ToString(@"mm\:ss\.fff");
 
         sheet.Columns(1, 2).Style.Alignment.WrapText = true;
         sheet.Columns().AdjustToContents();

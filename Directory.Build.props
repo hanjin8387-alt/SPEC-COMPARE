@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <NuGetAudit>false</NuGetAudit>
-    <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+    <RestoreIgnoreFailedSources>false</RestoreIgnoreFailedSources>
     <WarningsNotAsErrors>NU1900</WarningsNotAsErrors>
   </PropertyGroup>
 </Project>
