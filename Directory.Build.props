@@ -3,6 +3,7 @@
     <NuGetAudit>true</NuGetAudit>
     <RestoreIgnoreFailedSources>false</RestoreIgnoreFailedSources>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode>true</RestoreLockedMode>
     <WarningsNotAsErrors>NU1900</WarningsNotAsErrors>
   </PropertyGroup>
 </Project>
