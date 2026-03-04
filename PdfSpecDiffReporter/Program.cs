@@ -1,5 +1,4 @@
 using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Diagnostics;
 using System.Text.Json;
 using PdfSpecDiffReporter.Helpers;
@@ -12,49 +11,63 @@ const double DefaultDiffThreshold = 0.85d;
 const double DefaultChapterMatchThreshold = 0.70d;
 
 var sourcePdfArgument = new Argument<string>(
-    name: "source_pdf",
-    description: "Path to the source PDF.");
+    "source_pdf")
+{
+    Description = "Path to the source PDF."
+};
 
 var targetPdfArgument = new Argument<string>(
-    name: "target_pdf",
-    description: "Path to the target PDF.");
+    "target_pdf")
+{
+    Description = "Path to the target PDF."
+};
 
 var outputOption = new Option<string>(
-    aliases: new[] { "--output", "-o" },
-    getDefaultValue: () => @".\diff_report.xlsx",
-    description: "Path to the generated diff report (.xlsx).");
+    name: "--output",
+    aliases: new[] { "-o" })
+{
+    Description = "Path to the generated diff report (.xlsx).",
+    DefaultValueFactory = _ => @".\diff_report.xlsx"
+};
 
 var configOption = new Option<string?>(
-    aliases: new[] { "--config", "-c" },
-    description: "Optional JSON config file path.");
+    name: "--config",
+    aliases: new[] { "-c" })
+{
+    Description = "Optional JSON config file path."
+};
 
 var diffThresholdOption = new Option<double?>(
-    name: "--diff-threshold",
-    description: $"Similarity threshold for diff classification (0 < value <= 1, default {DefaultDiffThreshold:0.##}).");
+    "--diff-threshold")
+{
+    Description = $"Similarity threshold for diff classification (0 < value <= 1, default {DefaultDiffThreshold:0.##})."
+};
 
 var chapterMatchThresholdOption = new Option<double?>(
-    name: "--chapter-match-threshold",
-    description: $"Similarity threshold for chapter matching (0 < value <= 1, default {DefaultChapterMatchThreshold:0.##}).");
+    "--chapter-match-threshold")
+{
+    Description = $"Similarity threshold for chapter matching (0 < value <= 1, default {DefaultChapterMatchThreshold:0.##})."
+};
 
 var rootCommand = new RootCommand("PdfSpecDiffReporter - PDF specification diff tool.");
-rootCommand.AddArgument(sourcePdfArgument);
-rootCommand.AddArgument(targetPdfArgument);
-rootCommand.AddOption(outputOption);
-rootCommand.AddOption(configOption);
-rootCommand.AddOption(diffThresholdOption);
-rootCommand.AddOption(chapterMatchThresholdOption);
+rootCommand.Add(sourcePdfArgument);
+rootCommand.Add(targetPdfArgument);
+rootCommand.Add(outputOption);
+rootCommand.Add(configOption);
+rootCommand.Add(diffThresholdOption);
+rootCommand.Add(chapterMatchThresholdOption);
 
-rootCommand.SetHandler(
-    (InvocationContext context) =>
+rootCommand.SetAction(
+    parseResult =>
     {
-        var sourcePdfPath = context.ParseResult.GetValueForArgument(sourcePdfArgument);
-        var targetPdfPath = context.ParseResult.GetValueForArgument(targetPdfArgument);
-        var outputPath = context.ParseResult.GetValueForOption(outputOption) ?? @".\diff_report.xlsx";
-        var configPath = context.ParseResult.GetValueForOption(configOption);
-        var diffThresholdOverride = context.ParseResult.GetValueForOption(diffThresholdOption);
-        var chapterMatchThresholdOverride = context.ParseResult.GetValueForOption(chapterMatchThresholdOption);
+        var sourcePdfPath = parseResult.GetRequiredValue(sourcePdfArgument);
+        var targetPdfPath = parseResult.GetRequiredValue(targetPdfArgument);
+        var outputPath = parseResult.GetValue(outputOption) ?? @".\diff_report.xlsx";
+        var configPath = parseResult.GetValue(configOption);
+        var diffThresholdOverride = parseResult.GetValue(diffThresholdOption);
+        var chapterMatchThresholdOverride = parseResult.GetValue(chapterMatchThresholdOption);
 
-        context.ExitCode = RunPipeline(
+        return RunPipeline(
             sourcePdfPath,
             targetPdfPath,
             outputPath,
@@ -63,7 +76,7 @@ rootCommand.SetHandler(
             chapterMatchThresholdOverride);
     });
 
-return await rootCommand.InvokeAsync(args);
+return await rootCommand.Parse(args).InvokeAsync();
 
 int RunPipeline(
     string sourcePdfPath,

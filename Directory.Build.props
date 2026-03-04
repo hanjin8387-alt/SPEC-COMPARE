@@ -1,7 +1,8 @@
 <Project>
   <PropertyGroup>
-    <NuGetAudit>false</NuGetAudit>
+    <NuGetAudit>true</NuGetAudit>
     <RestoreIgnoreFailedSources>false</RestoreIgnoreFailedSources>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <WarningsNotAsErrors>NU1900</WarningsNotAsErrors>
   </PropertyGroup>
 </Project>
