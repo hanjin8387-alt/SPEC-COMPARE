@@ -1,0 +1,32 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  build-test-publish:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore (locked)
+        run: dotnet restore PdfSpecDiffReporter/PdfSpecDiffReporter.csproj --locked-mode
+
+      - name: Build
+        run: dotnet build PdfSpecDiffReporter/PdfSpecDiffReporter.csproj -c Release --warnaserror
+
+      - name: Test
+        run: dotnet test PdfSpecDiffReporter.Tests/PdfSpecDiffReporter.Tests.csproj -c Release
+
+      - name: Publish
+        run: dotnet publish PdfSpecDiffReporter/PdfSpecDiffReporter.csproj -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true

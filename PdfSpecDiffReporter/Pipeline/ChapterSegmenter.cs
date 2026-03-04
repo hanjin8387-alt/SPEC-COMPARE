@@ -190,6 +190,11 @@ public static class ChapterSegmenter
             return false;
         }
 
+        if (TocHintPattern.IsMatch(line))
+        {
+            return false;
+        }
+
         if (LooksLikeListItem(heading))
         {
             return false;

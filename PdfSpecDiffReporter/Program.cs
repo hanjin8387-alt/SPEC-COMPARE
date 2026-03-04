@@ -1,6 +1,5 @@
 using System.CommandLine;
 using System.Diagnostics;
-using System.Text.Json;
 using PdfSpecDiffReporter.Helpers;
 using PdfSpecDiffReporter.Models;
 using PdfSpecDiffReporter.Pipeline;
@@ -122,7 +121,7 @@ int RunPipeline(
             : ExceptionSanitizer.ValidationExitCode;
     }
 
-    var configLoadResult = LoadConfig(configPath);
+    var configLoadResult = PipelineConfigResolver.Load(configPath);
     if (!configLoadResult.IsValid || configLoadResult.Config is null)
     {
         WriteValidationError(configLoadResult.ErrorMessage);
@@ -131,11 +130,17 @@ int RunPipeline(
             : ExceptionSanitizer.ValidationExitCode;
     }
 
-    var config = configLoadResult.Config;
-    var textNormalizationOptions = config.TextNormalization ?? new TextNormalizationOptions();
-    var chapterSegmentationOptions = config.ChapterSegmentation ?? new ChapterSegmentationOptions();
-    var diffThreshold = diffThresholdOverride ?? config.DiffThreshold ?? DefaultDiffThreshold;
-    var chapterMatchThreshold = chapterMatchThresholdOverride ?? config.ChapterMatchThreshold ?? DefaultChapterMatchThreshold;
+    var resolvedOptions = PipelineConfigResolver.Resolve(
+        configLoadResult.Config,
+        diffThresholdOverride,
+        chapterMatchThresholdOverride,
+        DefaultDiffThreshold,
+        DefaultChapterMatchThreshold);
+
+    var textNormalizationOptions = resolvedOptions.TextNormalization;
+    var chapterSegmentationOptions = resolvedOptions.ChapterSegmentation;
+    var diffThreshold = resolvedOptions.DiffThreshold;
+    var chapterMatchThreshold = resolvedOptions.ChapterMatchThreshold;
 
     var diffThresholdValidation = InputValidator.ValidateSimilarityThreshold(diffThreshold, "Diff threshold");
     if (!diffThresholdValidation.IsValid)
@@ -324,60 +329,8 @@ static List<ChapterPair> BuildAllPairs(ChapterMatchResult chapterMatchResult)
     return allPairs;
 }
 
-static ConfigLoadResult LoadConfig(string? configPath)
-{
-    if (string.IsNullOrWhiteSpace(configPath))
-    {
-        return ConfigLoadResult.Valid(new PipelineConfig());
-    }
-
-    try
-    {
-        var json = File.ReadAllText(configPath);
-        var config = JsonSerializer.Deserialize<PipelineConfig>(
-            json,
-            new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                ReadCommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true
-            });
-
-        return ConfigLoadResult.Valid(config ?? new PipelineConfig());
-    }
-    catch (UnauthorizedAccessException)
-    {
-        return ConfigLoadResult.Invalid("Config file cannot be read.", isIoRelated: true);
-    }
-    catch (IOException)
-    {
-        return ConfigLoadResult.Invalid("Config file cannot be read.", isIoRelated: true);
-    }
-    catch (JsonException)
-    {
-        return ConfigLoadResult.Invalid("Config JSON is invalid.");
-    }
-}
-
 static void WriteValidationError(string? message)
 {
     var text = string.IsNullOrWhiteSpace(message) ? "Invalid input." : message;
     AnsiConsole.MarkupLine($"[red]Validation error:[/] {Markup.Escape(text)}");
-}
-
-readonly record struct ConfigLoadResult(
-    bool IsValid,
-    PipelineConfig? Config,
-    string? ErrorMessage,
-    bool IsIoRelated)
-{
-    public static ConfigLoadResult Valid(PipelineConfig config)
-    {
-        return new ConfigLoadResult(true, config, null, false);
-    }
-
-    public static ConfigLoadResult Invalid(string errorMessage, bool isIoRelated = false)
-    {
-        return new ConfigLoadResult(false, null, errorMessage, isIoRelated);
-    }
 }
