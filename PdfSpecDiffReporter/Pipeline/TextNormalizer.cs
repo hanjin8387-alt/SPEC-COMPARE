@@ -67,7 +67,7 @@ public static class TextNormalizer
 
             var page = pages[index];
             var zone = zones[index];
-            var lines = TextUtilities.SplitLines(page.RawText);
+            var lines = BuildPageLines(page);
 
             if (IsInRepeatedSet(zone.HeaderSignature, repeatedHeaders, options.RepeatingSimilarityThreshold))
             {
@@ -81,9 +81,8 @@ public static class TextNormalizer
 
             RemovePageNumberLine(lines);
 
-            var rebuiltText = string.Join('\n', lines);
-            var normalizedText = Normalize(rebuiltText);
-            cleanedPages.Add(new PageText(page.PageNumber, normalizedText, page.Words));
+            var rebuiltText = string.Join('\n', lines.Select(line => line.Text)).Trim();
+            cleanedPages.Add(new PageText(page.PageNumber, rebuiltText, lines.ToArray()));
         }
 
         return cleanedPages;
@@ -114,7 +113,9 @@ public static class TextNormalizer
         TextNormalizationOptions options,
         CancellationToken cancellationToken)
     {
-        var lines = WordLineBuilder.BuildLines(page, options.LineMergeTolerance, cancellationToken);
+        var lines = page.Lines.Count == 0
+            ? BuildPageLines(page)
+            : page.Lines;
         if (lines.Count < 2)
         {
             return ZoneSnapshot.Empty;
@@ -245,7 +246,7 @@ public static class TextNormalizer
     }
 
     private static void RemoveLinesFromTop(
-        List<string> lines,
+        List<TextLine> lines,
         IReadOnlyList<string> candidates,
         int searchWindow,
         double similarityThreshold)
@@ -265,7 +266,7 @@ public static class TextNormalizer
             var topLimit = Math.Min(lines.Count, searchWindow);
             for (var index = 0; index < topLimit; index++)
             {
-                var normalizedLine = Normalize(lines[index]);
+                var normalizedLine = lines[index].NormalizedText;
                 if (normalizedLine.Length == 0)
                 {
                     continue;
@@ -281,7 +282,7 @@ public static class TextNormalizer
     }
 
     private static void RemoveLinesFromBottom(
-        List<string> lines,
+        List<TextLine> lines,
         IReadOnlyList<string> candidates,
         int searchWindow,
         double similarityThreshold)
@@ -302,7 +303,7 @@ public static class TextNormalizer
             var bottomStart = Math.Max(0, lines.Count - searchWindow);
             for (var lineIndex = lines.Count - 1; lineIndex >= bottomStart; lineIndex--)
             {
-                var normalizedLine = Normalize(lines[lineIndex]);
+                var normalizedLine = lines[lineIndex].NormalizedText;
                 if (normalizedLine.Length == 0)
                 {
                     continue;
@@ -317,14 +318,14 @@ public static class TextNormalizer
         }
     }
 
-    private static void RemovePageNumberLine(List<string> lines)
+    private static void RemovePageNumberLine(List<TextLine> lines)
     {
         if (lines.Count == 0)
         {
             return;
         }
 
-        if (PageNumberRegex.IsMatch(Normalize(lines[0])))
+        if (PageNumberRegex.IsMatch(lines[0].NormalizedText))
         {
             lines.RemoveAt(0);
         }
@@ -334,10 +335,31 @@ public static class TextNormalizer
             return;
         }
 
-        if (PageNumberRegex.IsMatch(Normalize(lines[^1])))
+        if (PageNumberRegex.IsMatch(lines[^1].NormalizedText))
         {
             lines.RemoveAt(lines.Count - 1);
         }
+    }
+
+    private static List<TextLine> BuildPageLines(PageText page)
+    {
+        if (page.Lines.Count > 0)
+        {
+            return page.Lines.ToList();
+        }
+
+        return TextUtilities.SplitLines(page.RawText)
+            .Select((line, index) => new TextLine(
+                page.PageNumber,
+                line,
+                Normalize(line),
+                -index,
+                0d,
+                0d,
+                0d,
+                0d,
+                0))
+            .ToList();
     }
 
     private sealed record ZoneSnapshot(

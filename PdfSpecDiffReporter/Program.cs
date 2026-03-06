@@ -1,5 +1,6 @@
 using System.CommandLine;
 using PdfSpecDiffReporter.Application;
+using PdfSpecDiffReporter.Models;
 using Spectre.Console;
 
 var sourcePdfArgument = new Argument<string>(
@@ -41,6 +42,24 @@ var chapterMatchThresholdOption = new Option<double?>(
     Description = "Similarity threshold for chapter matching (0 < value <= 1, default 0.7)."
 };
 
+var includeFullTextOption = new Option<bool?>(
+    "--include-full-text")
+{
+    Description = "Whether to include the FullText worksheet (true/false, default true)."
+};
+
+var previewTextLengthOption = new Option<int?>(
+    "--preview-length")
+{
+    Description = "Preview excerpt length written to ChangeDetails (0 to disable, default 500)."
+};
+
+var diagnosticsVerbosityOption = new Option<DiagnosticsVerbosity?>(
+    "--diagnostics-verbosity")
+{
+    Description = "Diagnostics verbosity (Minimal or Detailed)."
+};
+
 var rootCommand = new RootCommand("PdfSpecDiffReporter - PDF specification diff tool.");
 rootCommand.Add(sourcePdfArgument);
 rootCommand.Add(targetPdfArgument);
@@ -48,6 +67,9 @@ rootCommand.Add(outputOption);
 rootCommand.Add(configOption);
 rootCommand.Add(diffThresholdOption);
 rootCommand.Add(chapterMatchThresholdOption);
+rootCommand.Add(includeFullTextOption);
+rootCommand.Add(previewTextLengthOption);
+rootCommand.Add(diagnosticsVerbosityOption);
 
 var application = new SpecCompareApplication(AnsiConsole.Console);
 
@@ -71,7 +93,10 @@ rootCommand.SetAction(
                 parseResult.GetValue(outputOption) ?? "diff_report.xlsx",
                 parseResult.GetValue(configOption),
                 parseResult.GetValue(diffThresholdOption),
-                parseResult.GetValue(chapterMatchThresholdOption));
+                parseResult.GetValue(chapterMatchThresholdOption),
+                parseResult.GetValue(includeFullTextOption),
+                parseResult.GetValue(previewTextLengthOption),
+                parseResult.GetValue(diagnosticsVerbosityOption));
 
             return application.Run(request, cancellationSource.Token);
         }

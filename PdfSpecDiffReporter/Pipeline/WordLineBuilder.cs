@@ -8,15 +8,6 @@ namespace PdfSpecDiffReporter.Pipeline;
 internal static class WordLineBuilder
 {
     public static IReadOnlyList<TextLine> BuildLines(
-        PageText page,
-        double tolerance,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(page);
-        return BuildLines(page.PageNumber, page.Words, tolerance, cancellationToken);
-    }
-
-    public static IReadOnlyList<TextLine> BuildLines(
         int pageNumber,
         IReadOnlyList<WordInfo> words,
         double tolerance,

@@ -171,6 +171,23 @@ public static class InputValidator
         return ValidationResult.Valid();
     }
 
+    public static ValidationResult ValidateReportOptions(ReportOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.PreviewTextLength < 0 || options.PreviewTextLength > 20_000)
+        {
+            return ValidationResult.Invalid("reporting.previewTextLength must be between 0 and 20000.");
+        }
+
+        if (!Enum.IsDefined(options.DiagnosticsVerbosity))
+        {
+            return ValidationResult.Invalid("reporting.diagnosticsVerbosity must be Minimal or Detailed.");
+        }
+
+        return ValidationResult.Valid();
+    }
+
     public static OutputPathValidationResult ValidateOutputPath(string? outputPath)
     {
         if (string.IsNullOrWhiteSpace(outputPath))

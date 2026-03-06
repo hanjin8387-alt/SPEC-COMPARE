@@ -9,6 +9,8 @@ public sealed class PipelineConfig
     public TextNormalizationOptions? TextNormalization { get; init; }
 
     public ChapterSegmentationOptions? ChapterSegmentation { get; init; }
+
+    public ReportOptions? Reporting { get; init; }
 }
 
 public sealed class TextNormalizationOptions

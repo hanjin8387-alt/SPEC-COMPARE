@@ -109,4 +109,32 @@ public sealed class ConfigResolverTests
         Assert.NotNull(options.TextNormalization);
         Assert.NotNull(options.ChapterSegmentation);
     }
+
+    [Fact]
+    public void Resolve_MergesReportingOptionsWithOverrides()
+    {
+        var config = new PipelineConfig
+        {
+            Reporting = new ReportOptions
+            {
+                IncludeFullTextSheet = false,
+                PreviewTextLength = 120,
+                DiagnosticsVerbosity = DiagnosticsVerbosity.Minimal
+            }
+        };
+
+        var options = PipelineConfigResolver.Resolve(
+            config,
+            diffThresholdOverride: null,
+            chapterMatchThresholdOverride: null,
+            includeFullTextSheetOverride: true,
+            previewTextLengthOverride: 42,
+            diagnosticsVerbosityOverride: DiagnosticsVerbosity.Detailed,
+            defaultDiffThreshold: 0.85d,
+            defaultChapterMatchThreshold: 0.70d);
+
+        Assert.True(options.Reporting.IncludeFullTextSheet);
+        Assert.Equal(42, options.Reporting.PreviewTextLength);
+        Assert.Equal(DiagnosticsVerbosity.Detailed, options.Reporting.DiagnosticsVerbosity);
+    }
 }

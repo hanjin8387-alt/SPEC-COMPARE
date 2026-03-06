@@ -101,7 +101,7 @@ public sealed class ChapterMatcherTests
             MatchKey = matchKey,
             Title = title,
             Level = level,
-            Content = string.Empty,
+            Blocks = Array.Empty<TextBlock>(),
             PageStart = 1,
             PageEnd = 1,
             Order = order,

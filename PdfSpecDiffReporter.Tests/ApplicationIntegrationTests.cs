@@ -83,7 +83,7 @@ public sealed class ApplicationIntegrationTests
                 new SpecCompareRequest(sourcePdf, targetPdf, outputPath, null, null, null),
                 cancellationSource.Token);
 
-            Assert.Equal(ExceptionSanitizer.RuntimeExitCode, exitCode);
+            Assert.Equal(ExceptionSanitizer.CanceledExitCode, exitCode);
             Assert.False(File.Exists(outputPath));
         }
         finally

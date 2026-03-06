@@ -23,6 +23,7 @@ dist/
 stdout
 restore-diag.log
 TestResults/
+.codex/
 
 # OS files
 Thumbs.db

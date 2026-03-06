@@ -88,13 +88,28 @@ public sealed class DiffEngineTests
 
     private static ChapterNode CreateNode(string key, string title, string content)
     {
+        var lines = content
+            .Split('\n')
+            .Select((line, index) => new TextLine(
+                1,
+                line,
+                TextNormalizer.Normalize(line),
+                -index,
+                0d,
+                0d,
+                0d,
+                0d,
+                0))
+            .ToArray();
+        var blocks = TextBlockBuilder.BuildBlocks(lines);
+
         return new ChapterNode
         {
             Key = key,
             MatchKey = key,
             Title = title,
             Level = 1,
-            Content = content,
+            Blocks = blocks,
             PageStart = 1,
             PageEnd = 1,
             Order = 0

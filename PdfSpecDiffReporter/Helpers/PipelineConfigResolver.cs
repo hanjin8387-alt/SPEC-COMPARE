@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using PdfSpecDiffReporter.Models;
 
 namespace PdfSpecDiffReporter.Helpers;
@@ -23,7 +24,11 @@ public static class PipelineConfigResolver
                 {
                     PropertyNameCaseInsensitive = true,
                     ReadCommentHandling = JsonCommentHandling.Skip,
-                    AllowTrailingCommas = true
+                    AllowTrailingCommas = true,
+                    Converters =
+                    {
+                        new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)
+                    }
                 });
 
             return ConfigLoadResult.Valid(config ?? new PipelineConfig());
@@ -49,13 +54,41 @@ public static class PipelineConfigResolver
         double defaultDiffThreshold,
         double defaultChapterMatchThreshold)
     {
+        return Resolve(
+            config,
+            diffThresholdOverride,
+            chapterMatchThresholdOverride,
+            includeFullTextSheetOverride: null,
+            previewTextLengthOverride: null,
+            diagnosticsVerbosityOverride: null,
+            defaultDiffThreshold,
+            defaultChapterMatchThreshold);
+    }
+
+    public static ResolvedPipelineOptions Resolve(
+        PipelineConfig? config,
+        double? diffThresholdOverride,
+        double? chapterMatchThresholdOverride,
+        bool? includeFullTextSheetOverride,
+        int? previewTextLengthOverride,
+        DiagnosticsVerbosity? diagnosticsVerbosityOverride,
+        double defaultDiffThreshold,
+        double defaultChapterMatchThreshold)
+    {
         config ??= new PipelineConfig();
+        var reporting = config.Reporting ?? new ReportOptions();
 
         return new ResolvedPipelineOptions(
             diffThresholdOverride ?? config.DiffThreshold ?? defaultDiffThreshold,
             chapterMatchThresholdOverride ?? config.ChapterMatchThreshold ?? defaultChapterMatchThreshold,
             config.TextNormalization ?? new TextNormalizationOptions(),
-            config.ChapterSegmentation ?? new ChapterSegmentationOptions());
+            config.ChapterSegmentation ?? new ChapterSegmentationOptions(),
+            new ReportOptions
+            {
+                IncludeFullTextSheet = includeFullTextSheetOverride ?? reporting.IncludeFullTextSheet,
+                PreviewTextLength = previewTextLengthOverride ?? reporting.PreviewTextLength,
+                DiagnosticsVerbosity = diagnosticsVerbosityOverride ?? reporting.DiagnosticsVerbosity
+            });
     }
 }
 
@@ -63,7 +96,8 @@ public readonly record struct ResolvedPipelineOptions(
     double DiffThreshold,
     double ChapterMatchThreshold,
     TextNormalizationOptions TextNormalization,
-    ChapterSegmentationOptions ChapterSegmentation);
+    ChapterSegmentationOptions ChapterSegmentation,
+    ReportOptions Reporting);
 
 public readonly record struct ConfigLoadResult(
     bool IsValid,

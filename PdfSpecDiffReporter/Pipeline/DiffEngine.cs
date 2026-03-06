@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text.RegularExpressions;
 using PdfSpecDiffReporter.Helpers;
 using PdfSpecDiffReporter.Models;
 
@@ -9,12 +7,6 @@ namespace PdfSpecDiffReporter.Pipeline;
 
 public static class DiffEngine
 {
-    private static readonly Regex NumberedLinePattern =
-        new(@"^(?:\d+(?:\.\d+)*\s+\S+|\d+[.)]\s+|\(?[A-Za-z]\)\s+)", RegexOptions.Compiled);
-
-    private static readonly Regex BulletLinePattern =
-        new(@"^(?:[-*•]\s+)", RegexOptions.Compiled);
-
     public static List<DiffItem> ComputeDiffs(
         IReadOnlyList<ChapterPair> pairs,
         double similarityThreshold = 0.85d,
@@ -49,7 +41,7 @@ public static class DiffEngine
                         pair.Target.Key,
                         ChangeType.Added,
                         string.Empty,
-                        pair.Target.Content,
+                        GetChapterText(pair.Target),
                         0d,
                         BuildPageRef(null, pair.Target)));
 
@@ -61,7 +53,7 @@ public static class DiffEngine
                     result.Add(new DiffItem(
                         pair.Source.Key,
                         ChangeType.Deleted,
-                        pair.Source.Content,
+                        GetChapterText(pair.Source),
                         string.Empty,
                         0d,
                         BuildPageRef(pair.Source, null)));
@@ -102,8 +94,8 @@ public static class DiffEngine
     {
         AppendTitleDiffIfNeeded(destination, source, target);
 
-        var sourceBlocks = BuildBlocks(source.Content, cancellationToken);
-        var targetBlocks = BuildBlocks(target.Content, cancellationToken);
+        var sourceBlocks = source.Blocks;
+        var targetBlocks = target.Blocks;
         if (sourceBlocks.Count == 0 && targetBlocks.Count == 0)
         {
             return;
@@ -309,46 +301,9 @@ public static class DiffEngine
         return alignments;
     }
 
-    private static IReadOnlyList<TextBlock> BuildBlocks(string? text, CancellationToken cancellationToken)
+    private static string GetChapterText(ChapterNode chapter)
     {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return Array.Empty<TextBlock>();
-        }
-
-        var lines = TextUtilities.SplitLines(text);
-        var blocks = new List<TextBlock>();
-        var currentOriginal = new List<string>();
-        var currentNormalized = new List<string>();
-        string? previousNormalized = null;
-
-        foreach (var rawLine in lines)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var trimmed = rawLine.Trim();
-            var normalized = TextNormalizer.Normalize(trimmed);
-            if (normalized.Length == 0)
-            {
-                FlushCurrentBlock(blocks, currentOriginal, currentNormalized);
-                previousNormalized = null;
-                continue;
-            }
-
-            if (currentOriginal.Count > 0 &&
-                previousNormalized is not null &&
-                ShouldStartNewBlock(previousNormalized, normalized))
-            {
-                FlushCurrentBlock(blocks, currentOriginal, currentNormalized);
-            }
-
-            currentOriginal.Add(trimmed);
-            currentNormalized.Add(normalized);
-            previousNormalized = normalized;
-        }
-
-        FlushCurrentBlock(blocks, currentOriginal, currentNormalized);
-        return blocks;
+        return chapter.Content;
     }
 
     private static string BuildPageRef(ChapterNode? source, ChapterNode? target)
@@ -356,66 +311,6 @@ public static class DiffEngine
         var start = source?.PageStart ?? target?.PageStart ?? 0;
         var end = source?.PageEnd ?? target?.PageEnd ?? start;
         return PageReferenceFormatter.Format(start, end);
-    }
-
-    private static bool ShouldStartNewBlock(string previousLine, string currentLine)
-    {
-        if (LooksLikeStructuralLine(previousLine) || LooksLikeStructuralLine(currentLine))
-        {
-            return true;
-        }
-
-        return EndsWithTerminalPunctuation(previousLine) && StartsLikeSentence(currentLine);
-    }
-
-    private static bool LooksLikeStructuralLine(string line)
-    {
-        if (NumberedLinePattern.IsMatch(line) || BulletLinePattern.IsMatch(line))
-        {
-            return true;
-        }
-
-        var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0 || tokens.Length > 8)
-        {
-            return false;
-        }
-
-        var uppercaseTokens = tokens.Count(token => token.All(ch => !char.IsLetter(ch) || char.IsUpper(ch)));
-        return uppercaseTokens >= Math.Max(1, (int)Math.Ceiling(tokens.Length * 0.7d));
-    }
-
-    private static bool EndsWithTerminalPunctuation(string line)
-    {
-        return line.EndsWith(".", StringComparison.Ordinal) ||
-               line.EndsWith("!", StringComparison.Ordinal) ||
-               line.EndsWith("?", StringComparison.Ordinal) ||
-               line.EndsWith(":", StringComparison.Ordinal) ||
-               line.EndsWith(";", StringComparison.Ordinal);
-    }
-
-    private static bool StartsLikeSentence(string line)
-    {
-        var firstLetter = line.FirstOrDefault(char.IsLetterOrDigit);
-        return firstLetter != default && (char.IsUpper(firstLetter) || char.IsDigit(firstLetter));
-    }
-
-    private static void FlushCurrentBlock(
-        ICollection<TextBlock> blocks,
-        ICollection<string> currentOriginal,
-        ICollection<string> currentNormalized)
-    {
-        if (currentOriginal.Count == 0 || currentNormalized.Count == 0)
-        {
-            return;
-        }
-
-        blocks.Add(new TextBlock(
-            string.Join('\n', currentOriginal).Trim(),
-            string.Join('\n', currentNormalized).Trim()));
-
-        currentOriginal.Clear();
-        currentNormalized.Clear();
     }
 
     private enum Step
@@ -427,6 +322,4 @@ public static class DiffEngine
     }
 
     private readonly record struct BlockAlignment(int SourceIndex, int TargetIndex, double Similarity);
-
-    private readonly record struct TextBlock(string OriginalText, string NormalizedText);
 }

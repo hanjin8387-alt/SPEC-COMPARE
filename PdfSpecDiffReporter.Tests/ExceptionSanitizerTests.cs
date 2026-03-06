@@ -11,6 +11,7 @@ public sealed class ExceptionSanitizerTests
     {
         Assert.Equal(ExceptionSanitizer.IoExitCode, ExceptionSanitizer.DetermineExitCode(new IOException("disk error")));
         Assert.Equal(ExceptionSanitizer.ValidationExitCode, ExceptionSanitizer.DetermineExitCode(new ArgumentOutOfRangeException("threshold")));
+        Assert.Equal(ExceptionSanitizer.CanceledExitCode, ExceptionSanitizer.DetermineExitCode(new OperationCanceledException()));
     }
 
     [Fact]

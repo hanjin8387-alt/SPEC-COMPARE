@@ -8,6 +8,7 @@ public static class ExceptionSanitizer
     public const int RuntimeExitCode = 1;
     public const int ValidationExitCode = 2;
     public const int IoExitCode = 3;
+    public const int CanceledExitCode = 4;
 
     public static SanitizedExceptionInfo Sanitize(Exception exception)
     {
@@ -56,6 +57,11 @@ public static class ExceptionSanitizer
         if (exception is ClassifiedException classifiedException)
         {
             return classifiedException.ExitCode;
+        }
+
+        if (exception is OperationCanceledException)
+        {
+            return CanceledExitCode;
         }
 
         if (IsIoException(exception))

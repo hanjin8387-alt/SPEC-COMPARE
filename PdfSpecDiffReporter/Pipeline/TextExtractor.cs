@@ -10,7 +10,10 @@ namespace PdfSpecDiffReporter.Pipeline;
 
 public static class TextExtractor
 {
-    public static List<PageText> ExtractPages(Stream pdfStream, CancellationToken cancellationToken = default)
+    public static List<PageText> ExtractPages(
+        Stream pdfStream,
+        double lineMergeTolerance = 2.0d,
+        CancellationToken cancellationToken = default)
     {
         if (pdfStream is null)
         {
@@ -45,10 +48,19 @@ public static class TextExtractor
                     })
                     .ToList();
 
+                var lines = WordLineBuilder.BuildLines(page.Number, words, lineMergeTolerance, cancellationToken);
+                var rawText = page.Text;
+                if (string.IsNullOrWhiteSpace(rawText))
+                {
+                    rawText = lines.Count == 0
+                        ? string.Empty
+                        : string.Join('\n', lines.Select(line => line.Text)).Trim();
+                }
+
                 pages.Add(new PageText(
                     page.Number,
-                    page.Text ?? string.Empty,
-                    words));
+                    rawText ?? string.Empty,
+                    lines));
             }
 
             return pages;

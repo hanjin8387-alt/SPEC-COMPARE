@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using PdfSpecDiffReporter.Helpers;
 using PdfSpecDiffReporter.Models;
@@ -25,8 +24,6 @@ public static class ChapterSegmenter
 
     private static readonly Regex MeasurementLeadingPattern =
         new(@"^\s*\d+(?:[.,]\d+)?\s*(?:mm|cm|m|kg|g|lb|hz|khz|mhz|ghz|v|ma|a|%)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    private const double PageContextLineTolerance = 2.0d;
 
     public static List<ChapterNode> Segment(
         IReadOnlyList<PageText> pages,
@@ -59,11 +56,12 @@ public static class ChapterSegmenter
             cancellationToken.ThrowIfCancellationRequested();
 
             var pageContext = BuildPageContext(page, cancellationToken);
-            var lines = TextUtilities.SplitLines(page.RawText);
-            foreach (var rawLine in lines)
+            var lines = GetContentLines(page);
+            foreach (var contentLine in lines)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                var rawLine = contentLine.Text;
                 var line = rawLine.Trim();
 
                 if (TryParseHeading(line, out var heading) &&
@@ -117,7 +115,7 @@ public static class ChapterSegmenter
                     current = preamble;
                 }
 
-                current.Content.AppendLine(rawLine);
+                current.Lines.Add(contentLine);
                 current.PageEnd = page.PageNumber;
             }
         }
@@ -139,7 +137,7 @@ public static class ChapterSegmenter
             foreach (var page in pages)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                root.Content.AppendLine(page.RawText);
+                root.Lines.AddRange(GetContentLines(page));
             }
 
             roots.Add(root);
@@ -355,7 +353,7 @@ public static class ChapterSegmenter
 
     private static PageHeadingContext BuildPageContext(PageText page, CancellationToken cancellationToken)
     {
-        var lines = WordLineBuilder.BuildLines(page, PageContextLineTolerance, cancellationToken);
+        var lines = page.Lines;
         if (lines.Count == 0)
         {
             return PageHeadingContext.Empty;
@@ -376,8 +374,9 @@ public static class ChapterSegmenter
                 line.MaxFontSize);
         }
 
-        var fontSizes = page.Words
-            .Select(word => word.FontSize)
+        var fontSizes = lines
+            .Where(line => line.AverageFontSize > 0d)
+            .SelectMany(line => Enumerable.Repeat(line.AverageFontSize, Math.Max(1, line.WordCount)))
             .Where(size => size > 0)
             .OrderBy(size => size)
             .ToArray();
@@ -426,15 +425,38 @@ public static class ChapterSegmenter
         return string.Join('.', normalized);
     }
 
+    private static IReadOnlyList<TextLine> GetContentLines(PageText page)
+    {
+        if (page.Lines.Count > 0)
+        {
+            return page.Lines;
+        }
+
+        return TextUtilities.SplitLines(page.RawText)
+            .Select((line, index) => new TextLine(
+                page.PageNumber,
+                line,
+                TextNormalizer.Normalize(line),
+                -index,
+                0d,
+                0d,
+                0d,
+                0d,
+                0))
+            .ToArray();
+    }
+
     private static ChapterNode Freeze(ChapterNodeBuilder builder)
     {
+        var blocks = TextBlockBuilder.BuildBlocks(builder.Lines);
+
         return new ChapterNode
         {
             Key = builder.Key,
             MatchKey = builder.MatchKey,
             Title = builder.Title,
             Level = builder.Level,
-            Content = builder.Content.ToString().TrimEnd(),
+            Blocks = blocks,
             Children = builder.Children.Select(Freeze).ToArray(),
             PageStart = builder.PageStart,
             PageEnd = builder.PageEnd,
@@ -484,7 +506,7 @@ public static class ChapterSegmenter
 
         public int Level { get; }
 
-        public StringBuilder Content { get; } = new();
+        public List<TextLine> Lines { get; } = new();
 
         public List<ChapterNodeBuilder> Children { get; } = new();
 

@@ -63,6 +63,54 @@ public sealed class ExcelReporterTests
         }
     }
 
+    [Fact]
+    public void Generate_RespectsFullTextAndPreviewOptions()
+    {
+        var outputPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.xlsx");
+        var before = new string('A', 30);
+        var after = new string('B', 30);
+        var pairs = new List<ChapterPair>
+        {
+            CreateMatchedPair("1", "1", "Overview", 0)
+        };
+        var diffs = new List<DiffItem>
+        {
+            new("1", ChangeType.Modified, before, after, 0.9d, "p.1")
+        };
+
+        try
+        {
+            ExcelReporter.Generate(
+                outputPath,
+                "source.pdf",
+                "target.pdf",
+                pairs,
+                diffs,
+                () => TimeSpan.FromSeconds(1),
+                reportOptions: new ReportOptions
+                {
+                    IncludeFullTextSheet = false,
+                    PreviewTextLength = 10,
+                    DiagnosticsVerbosity = DiagnosticsVerbosity.Minimal
+                },
+                cancellationToken: CancellationToken.None);
+
+            using var workbook = new XLWorkbook(outputPath);
+            var changeSheet = workbook.Worksheet("ChangeDetails");
+
+            Assert.DoesNotContain(workbook.Worksheets, sheet => sheet.Name == "FullText");
+            Assert.Equal("AAAAAAAAAA...", changeSheet.Cell(2, 5).GetString());
+            Assert.Equal("BBBBBBBBBB...", changeSheet.Cell(2, 6).GetString());
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+        }
+    }
+
     private static ChapterPair CreateMatchedPair(string sourceKey, string targetKey, string title, int order)
     {
         return new ChapterPair(
@@ -87,7 +135,7 @@ public sealed class ExcelReporterTests
             MatchKey = key,
             Title = title,
             Level = 1,
-            Content = $"{title} content",
+            Blocks = Array.Empty<TextBlock>(),
             PageStart = order + 1,
             PageEnd = order + 1,
             Order = order

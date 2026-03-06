@@ -69,7 +69,7 @@ public sealed class CancellationTests
             MatchKey = key,
             Title = title,
             Level = 1,
-            Content = string.Empty,
+            Blocks = Array.Empty<TextBlock>(),
             PageStart = 1,
             PageEnd = 1,
             Order = order

@@ -13,7 +13,9 @@ public sealed class ChapterNode
 
     public int Level { get; init; }
 
-    public string Content { get; init; } = string.Empty;
+    public IReadOnlyList<TextBlock> Blocks { get; init; } = Array.Empty<TextBlock>();
+
+    public string Content => TextBlock.CombineOriginalText(Blocks);
 
     public IReadOnlyList<ChapterNode> Children { get; init; } = Array.Empty<ChapterNode>();
 

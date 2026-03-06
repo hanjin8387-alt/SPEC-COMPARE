@@ -1,3 +1,5 @@
+using PdfSpecDiffReporter.Models;
+
 namespace PdfSpecDiffReporter.Application;
 
 public sealed record SpecCompareRequest(
@@ -6,4 +8,7 @@ public sealed record SpecCompareRequest(
     string OutputPath,
     string? ConfigPath,
     double? DiffThresholdOverride,
-    double? ChapterMatchThresholdOverride);
+    double? ChapterMatchThresholdOverride,
+    bool? IncludeFullTextSheetOverride = null,
+    int? PreviewTextLengthOverride = null,
+    DiagnosticsVerbosity? DiagnosticsVerbosityOverride = null);
