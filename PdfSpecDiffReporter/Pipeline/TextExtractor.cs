@@ -10,7 +10,7 @@ namespace PdfSpecDiffReporter.Pipeline;
 
 public static class TextExtractor
 {
-    public static List<PageText> ExtractPages(MemoryStream pdfStream)
+    public static List<PageText> ExtractPages(Stream pdfStream, CancellationToken cancellationToken = default)
     {
         if (pdfStream is null)
         {
@@ -30,6 +30,8 @@ public static class TextExtractor
 
             foreach (var page in document.GetPages())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var words = page.GetWords()
                     .Select(word =>
                     {

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -9,6 +9,8 @@ namespace PdfSpecDiffReporter.Helpers;
 
 public static class ExcelReporter
 {
+    private const int PreviewTextLength = 500;
+
     private static readonly string[] SummaryHeaders =
     {
         "Source File",
@@ -26,46 +28,74 @@ public static class ExcelReporter
 
     private static readonly string[] ChangeDetailHeaders =
     {
+        "Diff ID",
         "Chapter ID",
         "Section Title",
         "Change Type",
-        "Before (Old)",
-        "After (New)",
+        "Before Preview",
+        "After Preview",
         "Similarity (%)",
         "Page Refs"
     };
 
+    private static readonly string[] FullTextHeaders =
+    {
+        "Diff ID",
+        "Chapter ID",
+        "Change Type",
+        "Before Full Text",
+        "After Full Text",
+        "Page Refs"
+    };
+
+    private static readonly string[] MatchHeaders =
+    {
+        "Source ID",
+        "Source Title",
+        "Target ID",
+        "Target Title",
+        "Match Kind",
+        "Overall Score",
+        "Key Score",
+        "Title Score",
+        "Level Score",
+        "Order Score",
+        "Context Score",
+        "Reasons"
+    };
+
     private static readonly string[] UnmatchedHeaders =
     {
-        "Origin (Old/New)",
+        "Origin",
         "Chapter ID",
         "Title",
+        "Page Refs",
         "Status"
+    };
+
+    private static readonly string[] DiagnosticsHeaders =
+    {
+        "Key",
+        "Value"
     };
 
     public static void Generate(
         string outputPath,
         string sourceFileName,
         string targetFileName,
-        List<ChapterPair> allPairs,
-        List<DiffItem> diffs,
-        Func<TimeSpan> processingTimeProvider)
+        IReadOnlyList<ChapterPair> allPairs,
+        IReadOnlyList<DiffItem> diffs,
+        Func<TimeSpan> processingTimeProvider,
+        IReadOnlyList<KeyValuePair<string, string>>? diagnostics = null,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(outputPath))
         {
             throw new ArgumentException("Output path must not be null or whitespace.", nameof(outputPath));
         }
 
-        if (allPairs is null)
-        {
-            throw new ArgumentNullException(nameof(allPairs));
-        }
-
-        if (diffs is null)
-        {
-            throw new ArgumentNullException(nameof(diffs));
-        }
-
+        ArgumentNullException.ThrowIfNull(allPairs);
+        ArgumentNullException.ThrowIfNull(diffs);
         ArgumentNullException.ThrowIfNull(processingTimeProvider);
 
         try
@@ -77,16 +107,16 @@ public static class ExcelReporter
                 Directory.CreateDirectory(directoryPath);
             }
 
+            var orderedPairs = OrderPairs(allPairs);
+            var orderedDiffs = diffs.ToList();
+
             using var workbook = new XLWorkbook();
-            BuildChangeDetailsSheet(workbook, allPairs, diffs);
-            BuildUnmatchedSheet(workbook, allPairs);
-            BuildSummarySheet(
-                workbook,
-                sourceFileName,
-                targetFileName,
-                allPairs,
-                diffs,
-                processingTimeProvider());
+            BuildSummarySheet(workbook, sourceFileName, targetFileName, orderedPairs, orderedDiffs, processingTimeProvider());
+            BuildChangeDetailsSheet(workbook, orderedPairs, orderedDiffs, cancellationToken);
+            BuildFullTextSheet(workbook, orderedDiffs, cancellationToken);
+            BuildMatchEvidenceSheet(workbook, orderedPairs, cancellationToken);
+            BuildUnmatchedSheet(workbook, orderedPairs, cancellationToken);
+            BuildDiagnosticsSheet(workbook, sourceFileName, targetFileName, orderedPairs, orderedDiffs, processingTimeProvider(), diagnostics);
 
             using var fileStream = new FileStream(fullOutputPath, FileMode.Create, FileAccess.Write, FileShare.None);
             workbook.SaveAs(fileStream);
@@ -95,6 +125,15 @@ public static class ExcelReporter
         {
             throw ExceptionSanitizer.Wrap(ex);
         }
+    }
+
+    private static IReadOnlyList<ChapterPair> OrderPairs(IReadOnlyList<ChapterPair> allPairs)
+    {
+        return allPairs
+            .OrderBy(pair => pair.Source?.Order ?? int.MaxValue)
+            .ThenBy(pair => pair.Target?.Order ?? int.MaxValue)
+            .ThenBy(pair => pair.Source?.Key ?? pair.Target?.Key ?? string.Empty, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static void BuildSummarySheet(
@@ -143,12 +182,14 @@ public static class ExcelReporter
         sheet.Columns().AdjustToContents();
         CapColumnWidth(sheet.Column(1), 60);
         CapColumnWidth(sheet.Column(2), 60);
+        PrepareSheet(sheet, filter: false);
     }
 
     private static void BuildChangeDetailsSheet(
         XLWorkbook workbook,
         IReadOnlyList<ChapterPair> allPairs,
-        IReadOnlyList<DiffItem> diffs)
+        IReadOnlyList<DiffItem> diffs,
+        CancellationToken cancellationToken)
     {
         var sheet = workbook.Worksheets.Add("ChangeDetails");
         WriteHeaders(sheet, ChangeDetailHeaders);
@@ -157,17 +198,21 @@ public static class ExcelReporter
 
         for (var index = 0; index < diffs.Count; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var item = diffs[index];
             var rowNumber = index + 2;
+            var diffId = $"D{index + 1:0000}";
             var chapterKey = item.ChapterKey ?? string.Empty;
 
-            sheet.Cell(rowNumber, 1).Value = chapterKey;
-            sheet.Cell(rowNumber, 2).Value = ResolveTitle(titleByKey, chapterKey);
-            sheet.Cell(rowNumber, 3).Value = item.ChangeType.ToString();
-            sheet.Cell(rowNumber, 4).Value = TruncateForCell(item.BeforeText);
-            sheet.Cell(rowNumber, 5).Value = TruncateForCell(item.AfterText);
-            sheet.Cell(rowNumber, 6).Value = NormalizeSimilarity(item.SimilarityScore);
-            sheet.Cell(rowNumber, 7).Value = TruncateForCell(item.PageRef);
+            sheet.Cell(rowNumber, 1).Value = diffId;
+            sheet.Cell(rowNumber, 2).Value = chapterKey;
+            sheet.Cell(rowNumber, 3).Value = ResolveTitle(titleByKey, chapterKey);
+            sheet.Cell(rowNumber, 4).Value = item.ChangeType.ToString();
+            sheet.Cell(rowNumber, 5).Value = CreatePreview(item.BeforeText);
+            sheet.Cell(rowNumber, 6).Value = CreatePreview(item.AfterText);
+            sheet.Cell(rowNumber, 7).Value = NormalizeSimilarity(item.SimilarityScore);
+            sheet.Cell(rowNumber, 8).Value = item.PageRef ?? string.Empty;
 
             var rowColor = item.ChangeType switch
             {
@@ -183,46 +228,174 @@ public static class ExcelReporter
             }
         }
 
-        sheet.Column(6).Style.NumberFormat.Format = "0.0";
+        sheet.Column(7).Style.NumberFormat.Format = "0.0";
         sheet.Columns().AdjustToContents();
 
-        ApplyWrappedColumn(sheet.Column(2), 45);
-        ApplyWrappedColumn(sheet.Column(4), 70);
+        ApplyWrappedColumn(sheet.Column(3), 45);
         ApplyWrappedColumn(sheet.Column(5), 70);
-        ApplyWrappedColumn(sheet.Column(7), 35);
+        ApplyWrappedColumn(sheet.Column(6), 70);
+        ApplyWrappedColumn(sheet.Column(8), 35);
+        PrepareSheet(sheet);
     }
 
-    private static void BuildUnmatchedSheet(XLWorkbook workbook, IReadOnlyList<ChapterPair> allPairs)
+    private static void BuildFullTextSheet(
+        XLWorkbook workbook,
+        IReadOnlyList<DiffItem> diffs,
+        CancellationToken cancellationToken)
+    {
+        var sheet = workbook.Worksheets.Add("FullText");
+        WriteHeaders(sheet, FullTextHeaders);
+
+        for (var index = 0; index < diffs.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var item = diffs[index];
+            var rowNumber = index + 2;
+
+            sheet.Cell(rowNumber, 1).Value = $"D{index + 1:0000}";
+            sheet.Cell(rowNumber, 2).Value = item.ChapterKey ?? string.Empty;
+            sheet.Cell(rowNumber, 3).Value = item.ChangeType.ToString();
+            sheet.Cell(rowNumber, 4).Value = item.BeforeText ?? string.Empty;
+            sheet.Cell(rowNumber, 5).Value = item.AfterText ?? string.Empty;
+            sheet.Cell(rowNumber, 6).Value = item.PageRef ?? string.Empty;
+        }
+
+        sheet.Columns().AdjustToContents();
+        ApplyWrappedColumn(sheet.Column(4), 90);
+        ApplyWrappedColumn(sheet.Column(5), 90);
+        ApplyWrappedColumn(sheet.Column(6), 35);
+        PrepareSheet(sheet);
+    }
+
+    private static void BuildMatchEvidenceSheet(
+        XLWorkbook workbook,
+        IReadOnlyList<ChapterPair> allPairs,
+        CancellationToken cancellationToken)
+    {
+        var sheet = workbook.Worksheets.Add("MatchEvidence");
+        WriteHeaders(sheet, MatchHeaders);
+
+        var matchedPairs = allPairs
+            .Where(pair => pair.Source is not null && pair.Target is not null)
+            .ToList();
+
+        for (var index = 0; index < matchedPairs.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var pair = matchedPairs[index];
+            var evidence = pair.Evidence ?? ChapterMatchEvidence.None;
+            var rowNumber = index + 2;
+
+            sheet.Cell(rowNumber, 1).Value = pair.Source!.Key;
+            sheet.Cell(rowNumber, 2).Value = pair.Source.Title;
+            sheet.Cell(rowNumber, 3).Value = pair.Target!.Key;
+            sheet.Cell(rowNumber, 4).Value = pair.Target.Title;
+            sheet.Cell(rowNumber, 5).Value = evidence.Kind.ToString();
+            sheet.Cell(rowNumber, 6).Value = NormalizeSimilarity(evidence.OverallScore);
+            sheet.Cell(rowNumber, 7).Value = NormalizeSimilarity(evidence.KeyScore);
+            sheet.Cell(rowNumber, 8).Value = NormalizeSimilarity(evidence.TitleScore);
+            sheet.Cell(rowNumber, 9).Value = NormalizeSimilarity(evidence.LevelScore);
+            sheet.Cell(rowNumber, 10).Value = NormalizeSimilarity(evidence.OrderScore);
+            sheet.Cell(rowNumber, 11).Value = NormalizeSimilarity(evidence.ContextScore);
+            sheet.Cell(rowNumber, 12).Value = string.Join("; ", evidence.Reasons);
+        }
+
+        sheet.Columns(6, 11).Style.NumberFormat.Format = "0.0";
+        sheet.Columns().AdjustToContents();
+        ApplyWrappedColumn(sheet.Column(2), 45);
+        ApplyWrappedColumn(sheet.Column(4), 45);
+        ApplyWrappedColumn(sheet.Column(12), 70);
+        PrepareSheet(sheet);
+    }
+
+    private static void BuildUnmatchedSheet(
+        XLWorkbook workbook,
+        IReadOnlyList<ChapterPair> allPairs,
+        CancellationToken cancellationToken)
     {
         var sheet = workbook.Worksheets.Add("Unmatched");
         WriteHeaders(sheet, UnmatchedHeaders);
 
-        var rowNumber = 2;
-        foreach (var pair in allPairs)
+        var unmatched = allPairs
+            .Where(pair => pair.Source is null || pair.Target is null)
+            .OrderBy(pair => pair.Source?.Order ?? pair.Target?.Order ?? int.MaxValue)
+            .ToList();
+
+        for (var index = 0; index < unmatched.Count; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var pair = unmatched[index];
+            var rowNumber = index + 2;
+
             if (pair.Source is not null && pair.Target is null)
             {
                 sheet.Cell(rowNumber, 1).Value = "Old";
                 sheet.Cell(rowNumber, 2).Value = pair.Source.Key;
                 sheet.Cell(rowNumber, 3).Value = pair.Source.Title;
-                sheet.Cell(rowNumber, 4).Value = "Deleted (No Match in New)";
+                sheet.Cell(rowNumber, 4).Value = PageReferenceFormatter.Format(pair.Source.PageStart, pair.Source.PageEnd);
+                sheet.Cell(rowNumber, 5).Value = "Deleted (No Match in New)";
                 sheet.Row(rowNumber).Style.Fill.BackgroundColor = XLColor.FromHtml("#FFC7CE");
-                rowNumber++;
             }
             else if (pair.Source is null && pair.Target is not null)
             {
                 sheet.Cell(rowNumber, 1).Value = "New";
                 sheet.Cell(rowNumber, 2).Value = pair.Target.Key;
                 sheet.Cell(rowNumber, 3).Value = pair.Target.Title;
-                sheet.Cell(rowNumber, 4).Value = "Added (No Match in Old)";
+                sheet.Cell(rowNumber, 4).Value = PageReferenceFormatter.Format(pair.Target.PageStart, pair.Target.PageEnd);
+                sheet.Cell(rowNumber, 5).Value = "Added (No Match in Old)";
                 sheet.Row(rowNumber).Style.Fill.BackgroundColor = XLColor.FromHtml("#C6EFCE");
-                rowNumber++;
             }
         }
 
         sheet.Columns().AdjustToContents();
         ApplyWrappedColumn(sheet.Column(3), 50);
-        ApplyWrappedColumn(sheet.Column(4), 45);
+        ApplyWrappedColumn(sheet.Column(5), 45);
+        PrepareSheet(sheet);
+    }
+
+    private static void BuildDiagnosticsSheet(
+        XLWorkbook workbook,
+        string sourceFileName,
+        string targetFileName,
+        IReadOnlyList<ChapterPair> allPairs,
+        IReadOnlyList<DiffItem> diffs,
+        TimeSpan processingTime,
+        IReadOnlyList<KeyValuePair<string, string>>? diagnostics)
+    {
+        var sheet = workbook.Worksheets.Add("Diagnostics");
+        WriteHeaders(sheet, DiagnosticsHeaders);
+
+        var rows = new List<KeyValuePair<string, string>>
+        {
+            new("Generated UTC", DateTime.UtcNow.ToString("u")),
+            new("Source File", sourceFileName ?? string.Empty),
+            new("Target File", targetFileName ?? string.Empty),
+            new("Matched Chapters", allPairs.Count(pair => pair.Source is not null && pair.Target is not null).ToString()),
+            new("Unmatched Source Chapters", allPairs.Count(pair => pair.Source is not null && pair.Target is null).ToString()),
+            new("Unmatched Target Chapters", allPairs.Count(pair => pair.Source is null && pair.Target is not null).ToString()),
+            new("Modified Items", diffs.Count(item => item.ChangeType == ChangeType.Modified).ToString()),
+            new("Added Items", diffs.Count(item => item.ChangeType == ChangeType.Added).ToString()),
+            new("Deleted Items", diffs.Count(item => item.ChangeType == ChangeType.Deleted).ToString()),
+            new("Processing Time", processingTime.ToString(@"mm\:ss\.fff"))
+        };
+
+        if (diagnostics is not null)
+        {
+            rows.AddRange(diagnostics);
+        }
+
+        for (var index = 0; index < rows.Count; index++)
+        {
+            sheet.Cell(index + 2, 1).Value = rows[index].Key;
+            sheet.Cell(index + 2, 2).Value = rows[index].Value;
+        }
+
+        sheet.Columns().AdjustToContents();
+        ApplyWrappedColumn(sheet.Column(2), 80);
+        PrepareSheet(sheet, filter: false);
     }
 
     private static Dictionary<string, string> BuildTitleByKeyLookup(IReadOnlyList<ChapterPair> allPairs)
@@ -267,16 +440,16 @@ public static class ExcelReporter
         return Math.Clamp(percentage, 0d, 100d);
     }
 
-    private static string TruncateForCell(string? value)
+    private static string CreatePreview(string? value)
     {
         if (string.IsNullOrEmpty(value))
         {
             return string.Empty;
         }
 
-        return value.Length <= Constants.MaxExcerptLength
+        return value.Length <= PreviewTextLength
             ? value
-            : value[..Constants.MaxExcerptLength];
+            : $"{value[..PreviewTextLength]}...";
     }
 
     private static void WriteHeaders(IXLWorksheet sheet, IReadOnlyList<string> headers)
@@ -286,6 +459,15 @@ public static class ExcelReporter
             var cell = sheet.Cell(1, index + 1);
             cell.Value = headers[index];
             cell.Style.Font.Bold = true;
+        }
+    }
+
+    private static void PrepareSheet(IXLWorksheet sheet, bool filter = true)
+    {
+        sheet.SheetView.FreezeRows(1);
+        if (filter && sheet.LastRowUsed() is not null && sheet.LastColumnUsed() is not null)
+        {
+            sheet.Range(1, 1, sheet.LastRowUsed()!.RowNumber(), sheet.LastColumnUsed()!.ColumnNumber()).SetAutoFilter();
         }
     }
 
@@ -303,6 +485,4 @@ public static class ExcelReporter
             column.Width = maxWidth;
         }
     }
-
 }
-

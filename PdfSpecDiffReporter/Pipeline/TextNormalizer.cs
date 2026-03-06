@@ -29,7 +29,8 @@ public static class TextNormalizer
 
     public static List<PageText> RemoveHeadersFooters(
         IReadOnlyList<PageText> pages,
-        TextNormalizationOptions? options = null)
+        TextNormalizationOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
         if (pages is null)
         {
@@ -43,22 +44,29 @@ public static class TextNormalizer
 
         options ??= new TextNormalizationOptions();
 
-        var zones = pages.Select(page => BuildZones(page, options)).ToList();
+        var zones = pages
+            .Select(page => BuildZones(page, options, cancellationToken))
+            .ToList();
+
         var repeatedHeaders = FindRepeatingZoneSignatures(
             zones.Select(zone => zone.HeaderSignature).ToList(),
             options.MinRepeatingPages,
-            options.RepeatingSimilarityThreshold);
+            options.RepeatingSimilarityThreshold,
+            cancellationToken);
 
         var repeatedFooters = FindRepeatingZoneSignatures(
             zones.Select(zone => zone.FooterSignature).ToList(),
             options.MinRepeatingPages,
-            options.RepeatingSimilarityThreshold);
+            options.RepeatingSimilarityThreshold,
+            cancellationToken);
 
         var cleanedPages = new List<PageText>(pages.Count);
-        for (var i = 0; i < pages.Count; i++)
+        for (var index = 0; index < pages.Count; index++)
         {
-            var page = pages[i];
-            var zone = zones[i];
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var page = pages[index];
+            var zone = zones[index];
             var lines = TextUtilities.SplitLines(page.RawText);
 
             if (IsInRepeatedSet(zone.HeaderSignature, repeatedHeaders, options.RepeatingSimilarityThreshold))
@@ -101,14 +109,12 @@ public static class TextNormalizer
         return normalized.Trim();
     }
 
-    private static ZoneSnapshot BuildZones(PageText page, TextNormalizationOptions options)
+    private static ZoneSnapshot BuildZones(
+        PageText page,
+        TextNormalizationOptions options,
+        CancellationToken cancellationToken)
     {
-        if (page.Words.Count == 0)
-        {
-            return ZoneSnapshot.Empty;
-        }
-
-        var lines = ExtractLines(page.Words, options.LineMergeTolerance);
+        var lines = WordLineBuilder.BuildLines(page, options.LineMergeTolerance, cancellationToken);
         if (lines.Count < 2)
         {
             return ZoneSnapshot.Empty;
@@ -127,14 +133,14 @@ public static class TextNormalizer
 
         var headerLines = lines
             .Where(line => line.Y >= headerThreshold)
-            .Select(line => line.Text)
+            .Select(line => line.NormalizedText)
             .Where(text => text.Length >= options.MinZoneTextLength)
             .Take(options.ZoneLineLimit)
             .ToList();
 
         var footerCandidates = lines
             .Where(line => line.Y <= footerThreshold)
-            .Select(line => line.Text)
+            .Select(line => line.NormalizedText)
             .Where(text => text.Length >= options.MinZoneTextLength)
             .ToList();
 
@@ -146,64 +152,6 @@ public static class TextNormalizer
         var footerSignature = CanonicalizeZoneText(string.Join('\n', footerLines));
 
         return new ZoneSnapshot(headerSignature, headerLines, footerSignature, footerLines);
-    }
-
-    private static List<LineInfo> ExtractLines(IReadOnlyList<WordInfo> words, double tolerance)
-    {
-        if (words.Count == 0)
-        {
-            return new List<LineInfo>();
-        }
-
-        var ordered = words
-            .Where(word => !string.IsNullOrWhiteSpace(word.Text))
-            .OrderByDescending(word => word.Y)
-            .ThenBy(word => word.X)
-            .ToList();
-
-        var lineBuckets = new List<List<WordInfo>>();
-        var lineAnchors = new List<double>();
-
-        foreach (var word in ordered)
-        {
-            var bucketIndex = -1;
-            for (var i = 0; i < lineAnchors.Count; i++)
-            {
-                if (Math.Abs(lineAnchors[i] - word.Y) <= tolerance)
-                {
-                    bucketIndex = i;
-                    break;
-                }
-            }
-
-            if (bucketIndex < 0)
-            {
-                lineBuckets.Add(new List<WordInfo> { word });
-                lineAnchors.Add(word.Y);
-            }
-            else
-            {
-                lineBuckets[bucketIndex].Add(word);
-            }
-        }
-
-        var lines = new List<LineInfo>(lineBuckets.Count);
-        foreach (var bucket in lineBuckets)
-        {
-            var text = string.Join(" ", bucket.OrderBy(word => word.X).Select(word => word.Text));
-            var normalized = Normalize(text);
-            if (normalized.Length == 0)
-            {
-                continue;
-            }
-
-            var y = bucket.Average(word => word.Y);
-            lines.Add(new LineInfo(normalized, y));
-        }
-
-        return lines
-            .OrderByDescending(line => line.Y)
-            .ToList();
     }
 
     private static string CanonicalizeZoneText(string input)
@@ -222,7 +170,8 @@ public static class TextNormalizer
     private static HashSet<string> FindRepeatingZoneSignatures(
         IReadOnlyList<string> signatures,
         int minimumOccurrences,
-        double similarityThreshold)
+        double similarityThreshold,
+        CancellationToken cancellationToken)
     {
         var repeated = new HashSet<string>(StringComparer.Ordinal);
         if (signatures.Count < minimumOccurrences)
@@ -232,6 +181,8 @@ public static class TextNormalizer
 
         for (var i = 0; i < signatures.Count; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var baseSignature = signatures[i];
             if (string.IsNullOrWhiteSpace(baseSignature))
             {
@@ -241,6 +192,8 @@ public static class TextNormalizer
             var similarCount = 0;
             for (var j = 0; j < signatures.Count; j++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var candidate = signatures[j];
                 if (string.IsNullOrWhiteSpace(candidate))
                 {
@@ -287,7 +240,7 @@ public static class TextNormalizer
             return true;
         }
 
-        var similarity = SimilarityCalculator.Calculate(left, right, ignoreCase: true);
+        var similarity = SimilarityCalculator.CalculateHybrid(left, right, ignoreCase: true);
         return similarity >= threshold;
     }
 
@@ -310,9 +263,9 @@ public static class TextNormalizer
         foreach (var candidate in normalizedCandidates)
         {
             var topLimit = Math.Min(lines.Count, searchWindow);
-            for (var i = 0; i < topLimit; i++)
+            for (var index = 0; index < topLimit; index++)
             {
-                var normalizedLine = Normalize(lines[i]);
+                var normalizedLine = Normalize(lines[index]);
                 if (normalizedLine.Length == 0)
                 {
                     continue;
@@ -320,7 +273,7 @@ public static class TextNormalizer
 
                 if (IsSimilarNormalized(normalizedLine, candidate, similarityThreshold))
                 {
-                    lines.RemoveAt(i);
+                    lines.RemoveAt(index);
                     break;
                 }
             }
@@ -343,13 +296,13 @@ public static class TextNormalizer
             .Where(candidate => candidate.Length > 0)
             .ToList();
 
-        for (var c = normalizedCandidates.Count - 1; c >= 0; c--)
+        for (var candidateIndex = normalizedCandidates.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            var candidate = normalizedCandidates[c];
+            var candidate = normalizedCandidates[candidateIndex];
             var bottomStart = Math.Max(0, lines.Count - searchWindow);
-            for (var i = lines.Count - 1; i >= bottomStart; i--)
+            for (var lineIndex = lines.Count - 1; lineIndex >= bottomStart; lineIndex--)
             {
-                var normalizedLine = Normalize(lines[i]);
+                var normalizedLine = Normalize(lines[lineIndex]);
                 if (normalizedLine.Length == 0)
                 {
                     continue;
@@ -357,7 +310,7 @@ public static class TextNormalizer
 
                 if (IsSimilarNormalized(normalizedLine, candidate, similarityThreshold))
                 {
-                    lines.RemoveAt(i);
+                    lines.RemoveAt(lineIndex);
                     break;
                 }
             }
@@ -386,8 +339,6 @@ public static class TextNormalizer
             lines.RemoveAt(lines.Count - 1);
         }
     }
-
-    private readonly record struct LineInfo(string Text, double Y);
 
     private sealed record ZoneSnapshot(
         string HeaderSignature,

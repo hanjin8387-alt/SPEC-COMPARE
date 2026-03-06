@@ -30,4 +30,15 @@ public sealed class ExceptionSanitizerTests
         Assert.Contains("[Ref: ", sanitized.Message);
         Assert.DoesNotContain("secret", sanitized.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void WrapAndSanitize_PreserveCorrelationId()
+    {
+        var wrapped = Assert.IsType<ClassifiedException>(ExceptionSanitizer.Wrap(new IOException("C:\\secret\\spec.pdf")));
+
+        var sanitized = ExceptionSanitizer.Sanitize(wrapped);
+
+        Assert.Equal(wrapped.CorrelationId, sanitized.CorrelationId);
+        Assert.Contains(wrapped.CorrelationId, sanitized.Message, StringComparison.Ordinal);
+    }
 }

@@ -8,8 +8,14 @@ on:
       - main
 
 jobs:
-  build-test-publish:
-    runs-on: windows-latest
+  build-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +26,10 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore (locked)
-        run: dotnet restore PdfSpecDiffReporter/PdfSpecDiffReporter.csproj --locked-mode
+        run: dotnet restore PdfSpecDiffReporter.Tests/PdfSpecDiffReporter.Tests.csproj --locked-mode
 
       - name: Build
-        run: dotnet build PdfSpecDiffReporter/PdfSpecDiffReporter.csproj -c Release --warnaserror
+        run: dotnet build PdfSpecDiffReporter.Tests/PdfSpecDiffReporter.Tests.csproj -c Release --no-restore --warnaserror
 
       - name: Test
-        run: dotnet test PdfSpecDiffReporter.Tests/PdfSpecDiffReporter.Tests.csproj -c Release
-
-      - name: Publish
-        run: dotnet publish PdfSpecDiffReporter/PdfSpecDiffReporter.csproj -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
+        run: dotnet test PdfSpecDiffReporter.Tests/PdfSpecDiffReporter.Tests.csproj -c Release --no-build --collect:"XPlat Code Coverage"

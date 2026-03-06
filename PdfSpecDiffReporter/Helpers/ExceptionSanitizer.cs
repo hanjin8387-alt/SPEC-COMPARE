@@ -9,31 +9,16 @@ public static class ExceptionSanitizer
     public const int ValidationExitCode = 2;
     public const int IoExitCode = 3;
 
-    private static readonly string[] IoMarkers =
-    {
-        "[IOException]",
-        "[UnauthorizedAccessException]",
-        "[FileNotFoundException]",
-        "[DirectoryNotFoundException]",
-        "[PathTooLongException]"
-    };
-
-    private static readonly string[] ValidationMarkers =
-    {
-        "[ArgumentException]",
-        "[FormatException]",
-        "[ArgumentOutOfRangeException]",
-        "[ArgumentNullException]"
-    };
-
     public static SanitizedExceptionInfo Sanitize(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
 
-        var correlationId = Guid.NewGuid().ToString("N")[..8];
-        var exitCode = DetermineExitCode(exception);
+        var classified = exception as ClassifiedException;
+        var root = classified?.InnerException ?? exception;
+        var correlationId = classified?.CorrelationId ?? CreateCorrelationId();
+        var exitCode = classified?.ExitCode ?? DetermineExitCode(root);
 
-        var message = exception switch
+        var message = root switch
         {
             OperationCanceledException => "Operation canceled by user.",
             OutOfMemoryException => "Insufficient memory.",
@@ -52,15 +37,26 @@ public static class ExceptionSanitizer
     public static InvalidOperationException Wrap(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        var correlationId = Guid.NewGuid().ToString("N")[..8];
-        return new InvalidOperationException(
-            $"Operation failed. Correlation={correlationId}",
+
+        if (exception is ClassifiedException classifiedException)
+        {
+            return classifiedException;
+        }
+
+        return new ClassifiedException(
+            CreateCorrelationId(),
+            DetermineExitCode(exception),
             exception);
     }
 
     public static int DetermineExitCode(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
+
+        if (exception is ClassifiedException classifiedException)
+        {
+            return classifiedException.ExitCode;
+        }
 
         if (IsIoException(exception))
         {
@@ -82,11 +78,6 @@ public static class ExceptionSanitizer
             return true;
         }
 
-        if (exception is InvalidOperationException && ContainsAnyMarker(exception.Message, IoMarkers))
-        {
-            return true;
-        }
-
         return exception.InnerException is not null && IsIoException(exception.InnerException);
     }
 
@@ -97,30 +88,12 @@ public static class ExceptionSanitizer
             return true;
         }
 
-        if (exception is InvalidOperationException && ContainsAnyMarker(exception.Message, ValidationMarkers))
-        {
-            return true;
-        }
-
         return exception.InnerException is not null && IsValidationException(exception.InnerException);
     }
 
-    private static bool ContainsAnyMarker(string? message, IReadOnlyList<string> markers)
+    private static string CreateCorrelationId()
     {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return false;
-        }
-
-        foreach (var marker in markers)
-        {
-            if (message.Contains(marker, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return Guid.NewGuid().ToString("N")[..8];
     }
 }
 
@@ -128,3 +101,17 @@ public readonly record struct SanitizedExceptionInfo(
     string Message,
     string CorrelationId,
     int ExitCode);
+
+public sealed class ClassifiedException : InvalidOperationException
+{
+    public ClassifiedException(string correlationId, int exitCode, Exception innerException)
+        : base("Operation failed.", innerException)
+    {
+        CorrelationId = correlationId ?? throw new ArgumentNullException(nameof(correlationId));
+        ExitCode = exitCode;
+    }
+
+    public string CorrelationId { get; }
+
+    public int ExitCode { get; }
+}

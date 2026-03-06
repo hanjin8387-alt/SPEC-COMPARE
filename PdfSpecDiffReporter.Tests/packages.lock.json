@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net8.0": {
+      "coverlet.collector": {
+        "type": "Direct",
+        "requested": "[6.0.2, )",
+        "resolved": "6.0.2",
+        "contentHash": "bJShQ6uWRTQ100ZeyiMqcFlhP7WJ+bCuabUs885dJiBEzMsJMSFr7BOyeCw4rgvQokteGi5rKQTlkhfQPUXg2A=="
+      },
       "Microsoft.NET.Test.Sdk": {
         "type": "Direct",
         "requested": "[17.10.0, )",
@@ -45,11 +51,6 @@
         "type": "Transitive",
         "resolved": "2.0.0",
         "contentHash": "ngTqjYreDYNytG1W5d3ewHsw0ukmmrgV7EKnS4/40rXoYZGt07jrBvo+N+GxT49rcageUMUiprV0jYT4nwVBHQ=="
-      },
-      "DiffPlex": {
-        "type": "Transitive",
-        "resolved": "1.9.0",
-        "contentHash": "Z4IDEH6iOb6d+Y2QUjsbq1Fp5I/kwZzNdr/evBTbCGq+ShAjE4baLm7lX1tfjV2p34QI3V9kctCQziFuuKqeCA=="
       },
       "DocumentFormat.OpenXml": {
         "type": "Transitive",
@@ -178,7 +179,6 @@
         "type": "Project",
         "dependencies": {
           "ClosedXML": "[0.105.0, )",
-          "DiffPlex": "[1.9.0, )",
           "PdfPig": "[0.1.13, )",
           "Spectre.Console": "[0.54.0, )",
           "System.CommandLine": "[2.0.3, )"

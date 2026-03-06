@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using PdfSpecDiffReporter.Helpers;
+using PdfSpecDiffReporter.Models;
 
 namespace PdfSpecDiffReporter.Tests;
 
@@ -85,5 +86,19 @@ public sealed class InputValidatorTests
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public void ValidateTextNormalizationOptions_RejectsOutOfRangeBandPercent()
+    {
+        var options = new TextNormalizationOptions
+        {
+            HeaderFooterBandPercent = 0.75d
+        };
+
+        var result = InputValidator.ValidateTextNormalizationOptions(options);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("textNormalization.headerFooterBandPercent must be between 0 and 0.5.", result.ErrorMessage);
     }
 }

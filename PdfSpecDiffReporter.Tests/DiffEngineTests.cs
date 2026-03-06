@@ -12,8 +12,8 @@ public sealed class DiffEngineTests
     {
         var pair = new ChapterPair(
             CreateNode("1", "Overview", "System shall start quickly."),
-            CreateNode("1", "Overview", "System shall start.\n\nQuickly."),
-            1d);
+            CreateNode("1", "Overview", "System shall start.\nQuickly."),
+            null);
 
         var diffs = DiffEngine.ComputeDiffs(new List<ChapterPair> { pair }, 0.85d);
 
@@ -26,9 +26,9 @@ public sealed class DiffEngineTests
     public void ComputeDiffs_WhenParagraphsReordered_UsesAddDeleteInsteadOfFalseModified()
     {
         var pair = new ChapterPair(
-            CreateNode("1", "Overview", "Alpha paragraph.\n\nBeta paragraph."),
-            CreateNode("1", "Overview", "Beta paragraph.\n\nAlpha paragraph."),
-            1d);
+            CreateNode("1", "Overview", "Alpha paragraph.\nBeta paragraph."),
+            CreateNode("1", "Overview", "Beta paragraph.\nAlpha paragraph."),
+            null);
 
         var diffs = DiffEngine.ComputeDiffs(new List<ChapterPair> { pair }, 0.85d);
 
@@ -43,7 +43,7 @@ public sealed class DiffEngineTests
         var pair = new ChapterPair(
             CreateNode("1", "Overview", "Same paragraph."),
             CreateNode("1", "System Overview", "Same paragraph."),
-            0.5d);
+            null);
 
         var diffs = DiffEngine.ComputeDiffs(new List<ChapterPair> { pair }, 0.85d);
 
@@ -53,18 +53,51 @@ public sealed class DiffEngineTests
         Assert.Equal("System Overview", titleDiff.AfterText);
     }
 
+    [Fact]
+    public void ComputeDiffs_PreservesFullTextInDomainModel()
+    {
+        var before = new string('A', 640);
+        var after = new string('B', 640);
+        var pair = new ChapterPair(
+            CreateNode("1", "Overview", before),
+            CreateNode("1", "Overview", after),
+            null);
+
+        var diffs = DiffEngine.ComputeDiffs(new List<ChapterPair> { pair }, 0.10d);
+
+        Assert.Contains(diffs, diff => diff.ChangeType == ChangeType.Deleted && diff.BeforeText == before);
+        Assert.Contains(diffs, diff => diff.ChangeType == ChangeType.Added && diff.AfterText == after);
+        Assert.Contains(diffs, diff => diff.BeforeText.Length > 500 || diff.AfterText.Length > 500);
+    }
+
+    [Fact]
+    public void ComputeDiffs_WhenDenseSectionHasSingleSentenceChange_EmitsLocalizedModification()
+    {
+        var pair = new ChapterPair(
+            CreateNode("1", "Overview", "System shall initialize.\nThe module shall log events.\nShutdown shall be graceful."),
+            CreateNode("1", "Overview", "System shall initialize.\nThe module shall log audit events.\nShutdown shall be graceful."),
+            null);
+
+        var diffs = DiffEngine.ComputeDiffs(new List<ChapterPair> { pair }, 0.70d);
+
+        var modified = Assert.Single(diffs);
+        Assert.Equal(ChangeType.Modified, modified.ChangeType);
+        Assert.Contains("log events", modified.BeforeText);
+        Assert.Contains("log audit events", modified.AfterText);
+    }
+
     private static ChapterNode CreateNode(string key, string title, string content)
     {
-        var node = new ChapterNode
+        return new ChapterNode
         {
             Key = key,
+            MatchKey = key,
             Title = title,
             Level = 1,
+            Content = content,
             PageStart = 1,
-            PageEnd = 1
+            PageEnd = 1,
+            Order = 0
         };
-
-        node.Content.Append(content);
-        return node;
     }
 }

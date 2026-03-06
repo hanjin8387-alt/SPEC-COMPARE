@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using PdfSpecDiffReporter.Helpers;
 using PdfSpecDiffReporter.Models;
@@ -25,7 +26,12 @@ public static class ChapterSegmenter
     private static readonly Regex MeasurementLeadingPattern =
         new(@"^\s*\d+(?:[.,]\d+)?\s*(?:mm|cm|m|kg|g|lb|hz|khz|mhz|ghz|v|ma|a|%)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static List<ChapterNode> Segment(IReadOnlyList<PageText> pages, ChapterSegmentationOptions? options = null)
+    private const double PageContextLineTolerance = 2.0d;
+
+    public static List<ChapterNode> Segment(
+        IReadOnlyList<PageText> pages,
+        ChapterSegmentationOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
         if (pages is null)
         {
@@ -39,20 +45,25 @@ public static class ChapterSegmenter
 
         options ??= new ChapterSegmentationOptions();
 
-        var tocHints = BuildTocHints(pages, options);
-        var roots = new List<ChapterNode>();
-        var stack = new Stack<ChapterNode>();
+        var tocHints = BuildTocHints(pages, options, cancellationToken);
+        var roots = new List<ChapterNodeBuilder>();
+        var stack = new Stack<ChapterNodeBuilder>();
         var duplicateCounter = new Dictionary<string, int>(StringComparer.Ordinal);
-        ChapterNode? current = null;
-        ChapterNode? preamble = null;
+        ChapterNodeBuilder? current = null;
+        ChapterNodeBuilder? preamble = null;
         var preambleAdded = false;
+        var order = 0;
 
         foreach (var page in pages)
         {
-            var pageContext = BuildPageContext(page, options);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var pageContext = BuildPageContext(page, cancellationToken);
             var lines = TextUtilities.SplitLines(page.RawText);
             foreach (var rawLine in lines)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var line = rawLine.Trim();
 
                 if (TryParseHeading(line, out var heading) &&
@@ -63,28 +74,29 @@ public static class ChapterSegmenter
                         current.PageEnd = page.PageNumber;
                     }
 
-                    var uniqueKey = EnsureUniqueKey(heading.Key, duplicateCounter);
-                    var node = new ChapterNode
-                    {
-                        Key = uniqueKey,
-                        Title = heading.Title,
-                        Level = CalculateLevel(heading.Key),
-                        PageStart = page.PageNumber,
-                        PageEnd = page.PageNumber
-                    };
-
-                    while (stack.Count > 0 && stack.Peek().Level >= node.Level)
+                    while (stack.Count > 0 && stack.Peek().Level >= CalculateLevel(heading.Key))
                     {
                         stack.Pop();
                     }
 
-                    if (stack.Count == 0)
+                    var parent = stack.Count == 0 ? null : stack.Peek();
+                    var uniqueKey = EnsureUniqueKey(heading.Key, duplicateCounter);
+                    var node = new ChapterNodeBuilder(
+                        uniqueKey,
+                        heading.Key,
+                        heading.Title,
+                        CalculateLevel(heading.Key),
+                        page.PageNumber,
+                        order++,
+                        parent);
+
+                    if (parent is null)
                     {
                         roots.Add(node);
                     }
                     else
                     {
-                        stack.Peek().Children.Add(node);
+                        parent.Children.Add(node);
                     }
 
                     stack.Push(node);
@@ -94,14 +106,7 @@ public static class ChapterSegmenter
 
                 if (current is null)
                 {
-                    preamble ??= new ChapterNode
-                    {
-                        Key = "0",
-                        Title = "(Preamble)",
-                        Level = 0,
-                        PageStart = page.PageNumber,
-                        PageEnd = page.PageNumber
-                    };
+                    preamble ??= new ChapterNodeBuilder("0", "0", "(Preamble)", 0, page.PageNumber, order++, parent: null);
 
                     if (!preambleAdded)
                     {
@@ -119,24 +124,30 @@ public static class ChapterSegmenter
 
         if (roots.Count == 0)
         {
-            var root = new ChapterNode
+            var root = new ChapterNodeBuilder(
+                "0",
+                "0",
+                "(Document)",
+                0,
+                pages.First().PageNumber,
+                order++,
+                parent: null)
             {
-                Key = "0",
-                Title = "(Document)",
-                Level = 0,
-                PageStart = pages.First().PageNumber,
                 PageEnd = pages.Last().PageNumber
             };
 
             foreach (var page in pages)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 root.Content.AppendLine(page.RawText);
             }
 
             roots.Add(root);
         }
 
-        return roots;
+        return roots
+            .Select(Freeze)
+            .ToList();
     }
 
     private static bool TryParseHeading(string line, out ParsedHeading heading)
@@ -306,16 +317,23 @@ public static class ChapterSegmenter
                title.EndsWith("!", StringComparison.Ordinal);
     }
 
-    private static HashSet<string> BuildTocHints(IReadOnlyList<PageText> pages, ChapterSegmentationOptions options)
+    private static HashSet<string> BuildTocHints(
+        IReadOnlyList<PageText> pages,
+        ChapterSegmentationOptions options,
+        CancellationToken cancellationToken)
     {
         var hints = new HashSet<string>(StringComparer.Ordinal);
         var scanPages = Math.Min(options.TocScanPageCount, pages.Count);
 
-        for (var i = 0; i < scanPages; i++)
+        for (var pageIndex = 0; pageIndex < scanPages; pageIndex++)
         {
-            var lines = TextUtilities.SplitLines(pages[i].RawText);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var lines = TextUtilities.SplitLines(pages[pageIndex].RawText);
             foreach (var rawLine in lines)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var line = rawLine.Trim();
                 if (line.Length == 0)
                 {
@@ -335,66 +353,27 @@ public static class ChapterSegmenter
         return hints;
     }
 
-    private static PageHeadingContext BuildPageContext(PageText page, ChapterSegmentationOptions options)
+    private static PageHeadingContext BuildPageContext(PageText page, CancellationToken cancellationToken)
     {
-        if (page.Words.Count == 0)
+        var lines = WordLineBuilder.BuildLines(page, PageContextLineTolerance, cancellationToken);
+        if (lines.Count == 0)
         {
             return PageHeadingContext.Empty;
         }
 
-        var orderedWords = page.Words
-            .Where(word => !string.IsNullOrWhiteSpace(word.Text))
-            .OrderByDescending(word => word.Y)
-            .ThenBy(word => word.X)
-            .ToList();
-
-        var lines = new List<List<WordInfo>>();
-        var yAnchors = new List<double>();
-
-        foreach (var word in orderedWords)
-        {
-            var index = -1;
-            for (var i = 0; i < yAnchors.Count; i++)
-            {
-                if (Math.Abs(yAnchors[i] - word.Y) <= 2.0d)
-                {
-                    index = i;
-                    break;
-                }
-            }
-
-            if (index < 0)
-            {
-                lines.Add(new List<WordInfo> { word });
-                yAnchors.Add(word.Y);
-                continue;
-            }
-
-            lines[index].Add(word);
-        }
-
         var lineFonts = new Dictionary<string, double>(StringComparer.Ordinal);
-        foreach (var bucket in lines)
+        foreach (var line in lines)
         {
-            var lineText = string.Join(
-                " ",
-                bucket.OrderBy(word => word.X).Select(word => word.Text));
+            cancellationToken.ThrowIfCancellationRequested();
 
-            var normalizedLine = TextNormalizer.Normalize(lineText);
-            if (normalizedLine.Length == 0)
+            if (line.NormalizedText.Length == 0)
             {
                 continue;
             }
 
-            var lineFont = bucket.Max(word => word.FontSize);
-            if (lineFonts.TryGetValue(normalizedLine, out var existingFont))
-            {
-                lineFonts[normalizedLine] = Math.Max(existingFont, lineFont);
-            }
-            else
-            {
-                lineFonts[normalizedLine] = lineFont;
-            }
+            lineFonts[line.NormalizedText] = Math.Max(
+                lineFonts.TryGetValue(line.NormalizedText, out var existingFont) ? existingFont : 0d,
+                line.MaxFontSize);
         }
 
         var fontSizes = page.Words
@@ -447,6 +426,25 @@ public static class ChapterSegmenter
         return string.Join('.', normalized);
     }
 
+    private static ChapterNode Freeze(ChapterNodeBuilder builder)
+    {
+        return new ChapterNode
+        {
+            Key = builder.Key,
+            MatchKey = builder.MatchKey,
+            Title = builder.Title,
+            Level = builder.Level,
+            Content = builder.Content.ToString().TrimEnd(),
+            Children = builder.Children.Select(Freeze).ToArray(),
+            PageStart = builder.PageStart,
+            PageEnd = builder.PageEnd,
+            Order = builder.Order,
+            ParentKey = builder.ParentKey,
+            ParentMatchKey = builder.ParentMatchKey,
+            ParentTitle = builder.ParentTitle
+        };
+    }
+
     private enum HeadingKind
     {
         Numbered,
@@ -454,6 +452,54 @@ public static class ChapterSegmenter
     }
 
     private readonly record struct ParsedHeading(string Key, string Title, HeadingKind Kind);
+
+    private sealed class ChapterNodeBuilder
+    {
+        public ChapterNodeBuilder(
+            string key,
+            string matchKey,
+            string title,
+            int level,
+            int pageStart,
+            int order,
+            ChapterNodeBuilder? parent)
+        {
+            Key = key;
+            MatchKey = matchKey;
+            Title = title;
+            Level = level;
+            PageStart = pageStart;
+            PageEnd = pageStart;
+            Order = order;
+            ParentKey = parent?.Key ?? string.Empty;
+            ParentMatchKey = parent?.MatchKey ?? string.Empty;
+            ParentTitle = parent?.Title ?? string.Empty;
+        }
+
+        public string Key { get; }
+
+        public string MatchKey { get; }
+
+        public string Title { get; }
+
+        public int Level { get; }
+
+        public StringBuilder Content { get; } = new();
+
+        public List<ChapterNodeBuilder> Children { get; } = new();
+
+        public int PageStart { get; }
+
+        public int PageEnd { get; set; }
+
+        public int Order { get; }
+
+        public string ParentKey { get; }
+
+        public string ParentMatchKey { get; }
+
+        public string ParentTitle { get; }
+    }
 
     private sealed class PageHeadingContext
     {

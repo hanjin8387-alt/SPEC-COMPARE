@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using PdfSpecDiffReporter.Helpers;
 using PdfSpecDiffReporter.Models;
 
@@ -8,7 +9,16 @@ namespace PdfSpecDiffReporter.Pipeline;
 
 public static class DiffEngine
 {
-    public static List<DiffItem> ComputeDiffs(IReadOnlyList<ChapterPair> pairs, double similarityThreshold = 0.85d)
+    private static readonly Regex NumberedLinePattern =
+        new(@"^(?:\d+(?:\.\d+)*\s+\S+|\d+[.)]\s+|\(?[A-Za-z]\)\s+)", RegexOptions.Compiled);
+
+    private static readonly Regex BulletLinePattern =
+        new(@"^(?:[-*•]\s+)", RegexOptions.Compiled);
+
+    public static List<DiffItem> ComputeDiffs(
+        IReadOnlyList<ChapterPair> pairs,
+        double similarityThreshold = 0.85d,
+        CancellationToken cancellationToken = default)
     {
         if (pairs is null)
         {
@@ -26,6 +36,8 @@ public static class DiffEngine
 
             foreach (var pair in pairs)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (pair.Source is null && pair.Target is null)
                 {
                     continue;
@@ -33,11 +45,11 @@ public static class DiffEngine
 
                 if (pair.Source is null && pair.Target is not null)
                 {
-                    result.Add(CreateItem(
+                    result.Add(new DiffItem(
                         pair.Target.Key,
                         ChangeType.Added,
                         string.Empty,
-                        pair.Target.Content.ToString(),
+                        pair.Target.Content,
                         0d,
                         BuildPageRef(null, pair.Target)));
 
@@ -46,10 +58,10 @@ public static class DiffEngine
 
                 if (pair.Source is not null && pair.Target is null)
                 {
-                    result.Add(CreateItem(
+                    result.Add(new DiffItem(
                         pair.Source.Key,
                         ChangeType.Deleted,
-                        pair.Source.Content.ToString(),
+                        pair.Source.Content,
                         string.Empty,
                         0d,
                         BuildPageRef(pair.Source, null)));
@@ -57,7 +69,7 @@ public static class DiffEngine
                     continue;
                 }
 
-                AppendChapterDiffs(result, pair.Source!, pair.Target!, similarityThreshold);
+                AppendChapterDiffs(result, pair.Source!, pair.Target!, similarityThreshold, cancellationToken);
             }
 
             return result;
@@ -68,77 +80,79 @@ public static class DiffEngine
         }
     }
 
-    public static List<DiffItem> ComputeDiffs(ChapterMatchResult matchResult, double similarityThreshold = 0.85d)
+    public static List<DiffItem> ComputeDiffs(
+        ChapterMatchResult matchResult,
+        double similarityThreshold = 0.85d,
+        CancellationToken cancellationToken = default)
     {
         if (matchResult is null)
         {
             throw new ArgumentNullException(nameof(matchResult));
         }
 
-        var pairs = new List<ChapterPair>(matchResult.Matches);
-        pairs.AddRange(matchResult.UnmatchedSource.Select(node => new ChapterPair(node, null, 0d)));
-        pairs.AddRange(matchResult.UnmatchedTarget.Select(node => new ChapterPair(null, node, 0d)));
-
-        return ComputeDiffs(pairs, similarityThreshold);
+        return ComputeDiffs(matchResult.AllPairs, similarityThreshold, cancellationToken);
     }
 
     private static void AppendChapterDiffs(
         List<DiffItem> destination,
         ChapterNode source,
         ChapterNode target,
-        double similarityThreshold)
+        double similarityThreshold,
+        CancellationToken cancellationToken)
     {
         AppendTitleDiffIfNeeded(destination, source, target);
 
-        var sourceParagraphs = SplitParagraphs(source.Content.ToString());
-        var targetParagraphs = SplitParagraphs(target.Content.ToString());
-        if (sourceParagraphs.Length == 0 && targetParagraphs.Length == 0)
+        var sourceBlocks = BuildBlocks(source.Content, cancellationToken);
+        var targetBlocks = BuildBlocks(target.Content, cancellationToken);
+        if (sourceBlocks.Count == 0 && targetBlocks.Count == 0)
         {
             return;
         }
 
         var pageRef = BuildPageRef(source, target);
-        var alignments = AlignParagraphs(sourceParagraphs, targetParagraphs);
+        var alignments = AlignBlocks(sourceBlocks, targetBlocks, cancellationToken);
 
         foreach (var alignment in alignments)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (alignment.SourceIndex >= 0 && alignment.TargetIndex >= 0)
             {
-                var before = sourceParagraphs[alignment.SourceIndex];
-                var after = targetParagraphs[alignment.TargetIndex];
+                var before = sourceBlocks[alignment.SourceIndex];
+                var after = targetBlocks[alignment.TargetIndex];
                 var similarity = alignment.Similarity;
 
-                if (before.Equals(after, StringComparison.Ordinal))
+                if (before.NormalizedText.Equals(after.NormalizedText, StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 if (similarity >= similarityThreshold)
                 {
-                    destination.Add(CreateItem(
+                    destination.Add(new DiffItem(
                         source.Key,
                         ChangeType.Modified,
-                        before,
-                        after,
-                        similarity,
+                        before.OriginalText,
+                        after.OriginalText,
+                        Math.Clamp(similarity, 0d, 1d),
                         pageRef));
                 }
                 else
                 {
-                    destination.Add(CreateItem(
+                    destination.Add(new DiffItem(
                         source.Key,
                         ChangeType.Deleted,
-                        before,
+                        before.OriginalText,
                         string.Empty,
-                        similarity,
+                        Math.Clamp(similarity, 0d, 1d),
                         pageRef));
 
-                    destination.Add(CreateItem(
+                    destination.Add(new DiffItem(
                         target.Key,
                         ChangeType.Added,
                         string.Empty,
-                        after,
-                        similarity,
+                        after.OriginalText,
+                        Math.Clamp(similarity, 0d, 1d),
                         pageRef));
                 }
 
@@ -147,10 +161,10 @@ public static class DiffEngine
 
             if (alignment.SourceIndex >= 0)
             {
-                destination.Add(CreateItem(
+                destination.Add(new DiffItem(
                     source.Key,
                     ChangeType.Deleted,
-                    sourceParagraphs[alignment.SourceIndex],
+                    sourceBlocks[alignment.SourceIndex].OriginalText,
                     string.Empty,
                     0d,
                     pageRef));
@@ -160,11 +174,11 @@ public static class DiffEngine
 
             if (alignment.TargetIndex >= 0)
             {
-                destination.Add(CreateItem(
+                destination.Add(new DiffItem(
                     target.Key,
                     ChangeType.Added,
                     string.Empty,
-                    targetParagraphs[alignment.TargetIndex],
+                    targetBlocks[alignment.TargetIndex].OriginalText,
                     0d,
                     pageRef));
             }
@@ -178,26 +192,29 @@ public static class DiffEngine
             return;
         }
 
-        var similarity = SimilarityCalculator.Calculate(source.Title, target.Title, ignoreCase: true);
-        destination.Add(CreateItem(
+        var similarity = SimilarityCalculator.CalculateHybrid(source.Title, target.Title, ignoreCase: true);
+        destination.Add(new DiffItem(
             source.Key,
             ChangeType.Modified,
             source.Title,
             target.Title,
-            similarity,
+            Math.Clamp(similarity, 0d, 1d),
             BuildPageRef(source, target)));
     }
 
-    private static List<ParagraphAlignment> AlignParagraphs(IReadOnlyList<string> source, IReadOnlyList<string> target)
+    private static List<BlockAlignment> AlignBlocks(
+        IReadOnlyList<TextBlock> source,
+        IReadOnlyList<TextBlock> target,
+        CancellationToken cancellationToken)
     {
         if (source.Count == 0 && target.Count == 0)
         {
-            return new List<ParagraphAlignment>();
+            return new List<BlockAlignment>();
         }
 
         var n = source.Count;
         var m = target.Count;
-        const double gapPenalty = 0.35d;
+        const double gapPenalty = 0.45d;
 
         var score = new double[n + 1, m + 1];
         var trace = new Step[n + 1, m + 1];
@@ -207,7 +224,11 @@ public static class DiffEngine
         {
             for (var j = 0; j < m; j++)
             {
-                similarity[i, j] = SimilarityCalculator.Calculate(source[i], target[j], ignoreCase: true);
+                cancellationToken.ThrowIfCancellationRequested();
+                similarity[i, j] = SimilarityCalculator.CalculateHybrid(
+                    source[i].NormalizedText,
+                    target[j].NormalizedText,
+                    ignoreCase: true);
             }
         }
 
@@ -249,16 +270,17 @@ public static class DiffEngine
             }
         }
 
-        var alignments = new List<ParagraphAlignment>(n + m);
+        var alignments = new List<BlockAlignment>(n + m);
         var row = n;
         var col = m;
         while (row > 0 || col > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var step = trace[row, col];
 
             if (step == Step.Match && row > 0 && col > 0)
             {
-                alignments.Add(new ParagraphAlignment(row - 1, col - 1, similarity[row - 1, col - 1]));
+                alignments.Add(new BlockAlignment(row - 1, col - 1, similarity[row - 1, col - 1]));
                 row--;
                 col--;
                 continue;
@@ -266,19 +288,19 @@ public static class DiffEngine
 
             if (step == Step.Delete && row > 0)
             {
-                alignments.Add(new ParagraphAlignment(row - 1, -1, 0d));
+                alignments.Add(new BlockAlignment(row - 1, -1, 0d));
                 row--;
                 continue;
             }
 
             if (col > 0)
             {
-                alignments.Add(new ParagraphAlignment(-1, col - 1, 0d));
+                alignments.Add(new BlockAlignment(-1, col - 1, 0d));
                 col--;
             }
             else
             {
-                alignments.Add(new ParagraphAlignment(row - 1, -1, 0d));
+                alignments.Add(new BlockAlignment(row - 1, -1, 0d));
                 row--;
             }
         }
@@ -287,23 +309,46 @@ public static class DiffEngine
         return alignments;
     }
 
-    private static DiffItem CreateItem(
-        string chapterKey,
-        ChangeType changeType,
-        string before,
-        string after,
-        double similarity,
-        string pageRef)
+    private static IReadOnlyList<TextBlock> BuildBlocks(string? text, CancellationToken cancellationToken)
     {
-        return new DiffItem
+        if (string.IsNullOrWhiteSpace(text))
         {
-            ChapterKey = chapterKey ?? string.Empty,
-            ChangeType = changeType,
-            BeforeText = before ?? string.Empty,
-            AfterText = after ?? string.Empty,
-            SimilarityScore = Math.Clamp(similarity, 0d, 1d),
-            PageRef = pageRef ?? string.Empty
-        };
+            return Array.Empty<TextBlock>();
+        }
+
+        var lines = TextUtilities.SplitLines(text);
+        var blocks = new List<TextBlock>();
+        var currentOriginal = new List<string>();
+        var currentNormalized = new List<string>();
+        string? previousNormalized = null;
+
+        foreach (var rawLine in lines)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var trimmed = rawLine.Trim();
+            var normalized = TextNormalizer.Normalize(trimmed);
+            if (normalized.Length == 0)
+            {
+                FlushCurrentBlock(blocks, currentOriginal, currentNormalized);
+                previousNormalized = null;
+                continue;
+            }
+
+            if (currentOriginal.Count > 0 &&
+                previousNormalized is not null &&
+                ShouldStartNewBlock(previousNormalized, normalized))
+            {
+                FlushCurrentBlock(blocks, currentOriginal, currentNormalized);
+            }
+
+            currentOriginal.Add(trimmed);
+            currentNormalized.Add(normalized);
+            previousNormalized = normalized;
+        }
+
+        FlushCurrentBlock(blocks, currentOriginal, currentNormalized);
+        return blocks;
     }
 
     private static string BuildPageRef(ChapterNode? source, ChapterNode? target)
@@ -313,19 +358,64 @@ public static class DiffEngine
         return PageReferenceFormatter.Format(start, end);
     }
 
-    private static string[] SplitParagraphs(string? text)
+    private static bool ShouldStartNewBlock(string previousLine, string currentLine)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        if (LooksLikeStructuralLine(previousLine) || LooksLikeStructuralLine(currentLine))
         {
-            return Array.Empty<string>();
+            return true;
         }
 
-        return text.Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n')
-            .Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(paragraph => paragraph.Trim())
-            .Where(paragraph => !string.IsNullOrWhiteSpace(paragraph))
-            .ToArray();
+        return EndsWithTerminalPunctuation(previousLine) && StartsLikeSentence(currentLine);
+    }
+
+    private static bool LooksLikeStructuralLine(string line)
+    {
+        if (NumberedLinePattern.IsMatch(line) || BulletLinePattern.IsMatch(line))
+        {
+            return true;
+        }
+
+        var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0 || tokens.Length > 8)
+        {
+            return false;
+        }
+
+        var uppercaseTokens = tokens.Count(token => token.All(ch => !char.IsLetter(ch) || char.IsUpper(ch)));
+        return uppercaseTokens >= Math.Max(1, (int)Math.Ceiling(tokens.Length * 0.7d));
+    }
+
+    private static bool EndsWithTerminalPunctuation(string line)
+    {
+        return line.EndsWith(".", StringComparison.Ordinal) ||
+               line.EndsWith("!", StringComparison.Ordinal) ||
+               line.EndsWith("?", StringComparison.Ordinal) ||
+               line.EndsWith(":", StringComparison.Ordinal) ||
+               line.EndsWith(";", StringComparison.Ordinal);
+    }
+
+    private static bool StartsLikeSentence(string line)
+    {
+        var firstLetter = line.FirstOrDefault(char.IsLetterOrDigit);
+        return firstLetter != default && (char.IsUpper(firstLetter) || char.IsDigit(firstLetter));
+    }
+
+    private static void FlushCurrentBlock(
+        ICollection<TextBlock> blocks,
+        ICollection<string> currentOriginal,
+        ICollection<string> currentNormalized)
+    {
+        if (currentOriginal.Count == 0 || currentNormalized.Count == 0)
+        {
+            return;
+        }
+
+        blocks.Add(new TextBlock(
+            string.Join('\n', currentOriginal).Trim(),
+            string.Join('\n', currentNormalized).Trim()));
+
+        currentOriginal.Clear();
+        currentNormalized.Clear();
     }
 
     private enum Step
@@ -336,5 +426,7 @@ public static class DiffEngine
         Insert
     }
 
-    private readonly record struct ParagraphAlignment(int SourceIndex, int TargetIndex, double Similarity);
+    private readonly record struct BlockAlignment(int SourceIndex, int TargetIndex, double Similarity);
+
+    private readonly record struct TextBlock(string OriginalText, string NormalizedText);
 }
